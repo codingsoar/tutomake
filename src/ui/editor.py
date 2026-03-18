@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QListWidget,
                              QMenu, QMainWindow, QDockWidget, QGraphicsView, QGraphicsScene,
                              QGraphicsRectItem, QGraphicsLineItem, QGraphicsTextItem)
 from PySide6.QtGui import QPixmap, QPainter, QPen, QColor, QResizeEvent, QImage, QAction, QPolygon, QFont, QBrush, QWheelEvent
-from PySide6.QtCore import Qt, QRect, QTimer, Signal, QPoint, QRectF, QPointF
+from PySide6.QtCore import Qt, QRect, QTimer, Signal, QPoint, QRectF, QPointF, QSignalBlocker
 import os
 import cv2
 from ..key_utils import display_key_name
@@ -602,6 +602,14 @@ class TimelineWidget(QWidget):
         self.pixels_per_second = 50  # Base zoom level
         self.zoom_scale = 1.0  # Current zoom multiplier
         self.selected_step_index = -1  # Currently selected step (-1 = none)
+        self.playhead_line_item = None
+        self.playhead_triangle_item = None
+        self.step_rect_items = {}
+        self.step_text_items = {}
+        self.track_clip_y = 0
+        self.track_clip_h = 0
+        self.total_height = 0
+        self.scene_duration = 0.0
         
         # Playback state
         self.is_playing = False
@@ -726,7 +734,7 @@ class TimelineWidget(QWidget):
         """Handle zoom slider value change."""
         self.zoom_scale = value / 100.0
         self.zoom_label.setText(f"{value}%")
-        self.update_scene()
+        self.rebuild_scene()
         
     def zoom_in(self):
         new_val = min(self.zoom_slider.value() + 20, 400)
@@ -760,7 +768,7 @@ class TimelineWidget(QWidget):
         scroll_pos = scroll_bar.value()
         
         # Update scene and adjust scroll
-        self.update_scene()
+        self.rebuild_scene()
         
         # Center on cursor position after zoom
         new_center_x = center_x * factor
@@ -778,7 +786,7 @@ class TimelineWidget(QWidget):
             self.video_duration = 0
             self.fps = 24.0
         self.update_time_label()
-        self.update_scene()
+        self.rebuild_scene()
     
     def toggle_play(self):
         """Toggle playback state."""
@@ -805,7 +813,7 @@ class TimelineWidget(QWidget):
             self.play_timer.stop()
         
         # Update playhead and emit position change
-        self.update_scene()
+        self.update_playhead()
         self.position_changed.emit(self.current_position)
     
     def keyPressEvent(self, event):
@@ -818,42 +826,50 @@ class TimelineWidget(QWidget):
             return
         elif event.key() == Qt.Key.Key_Home:
             self.current_position = 0
-            self.update_scene()
+            self.update_playhead()
             self.position_changed.emit(self.current_position)
             event.accept()
             return
         elif event.key() == Qt.Key.Key_End:
             self.current_position = self.video_duration
-            self.update_scene()
+            self.update_playhead()
             self.position_changed.emit(self.current_position)
             event.accept()
             return
         elif event.key() == Qt.Key.Key_Left:
             self.current_position = max(0, self.current_position - 1)
-            self.update_scene()
+            self.update_playhead()
             self.position_changed.emit(self.current_position)
             event.accept()
             return
         elif event.key() == Qt.Key.Key_Right:
             self.current_position = min(self.video_duration, self.current_position + 1)
-            self.update_scene()
+            self.update_playhead()
             self.position_changed.emit(self.current_position)
             event.accept()
             return
         
         super().keyPressEvent(event)
         
-    def update_scene(self):
-        """Rebuild the QGraphicsScene with current zoom level."""
+    def rebuild_scene(self):
+        """Rebuild timeline background and clip items for structural changes."""
         self.scene.clear()
+        self.step_rect_items.clear()
+        self.step_text_items.clear()
+        self.playhead_line_item = None
+        self.playhead_triangle_item = None
         
         pps = self.pixels_per_second * self.zoom_scale
         duration = max(self.video_duration, 3600)  # Minimum 1 hour (feels infinite)
         total_width = int(duration * pps) + 100
+        self.scene_duration = duration
         
         ruler_height = 25
         track_height = 40  # Taller tracks for 2-track layout
         total_height = ruler_height + 2 * track_height  # Only V1 and A1
+        self.total_height = total_height
+        self.track_clip_y = ruler_height + 2
+        self.track_clip_h = track_height - 4
         
         # Set scene rect
         self.scene.setSceneRect(0, 0, total_width, total_height)
@@ -919,54 +935,87 @@ class TimelineWidget(QWidget):
         
         # ===== Step Clips on V1 =====
         if self.tutorial and self.tutorial.steps:
-            clip_y = ruler_height + 2
-            clip_h = track_height - 4
-            
             for i, step in enumerate(self.tutorial.steps):
-                x = int(step.timestamp * pps)
-                clip_w = max(30, int(pps * 0.5))
-                
-                if step.action_type == "keyboard":
-                    clip_color = QColor(0, 120, 200)
-                else:
-                    clip_color = QColor(200, 100, 0)
-                
-                # Highlight selected step
-                if hasattr(self, 'selected_step_index') and self.selected_step_index == i:
-                    border_pen = QPen(QColor(255, 255, 0), 3)  # Yellow border for selected
-                else:
-                    border_pen = QPen(QColor(255, 255, 255, 100), 1)
-                
-                clip = self.scene.addRect(x, clip_y, clip_w, clip_h, border_pen, QBrush(clip_color))
-                clip.setData(0, i)  # Store step index
+                clip = self.scene.addRect(0, self.track_clip_y, 0, self.track_clip_h, QPen(), QBrush())
+                clip.setData(0, i)
                 clip.setFlag(clip.GraphicsItemFlag.ItemIsSelectable, True)
-                
-                # Step number
-                text = self.scene.addText(str(i + 1), QFont("Arial", 9, QFont.Weight.Bold))
+                text = self.scene.addText("", QFont("Arial", 9, QFont.Weight.Bold))
                 text.setDefaultTextColor(QColor(255, 255, 255))
-                text.setPos(x + 4, clip_y)
-        
-        # ===== Playhead =====
-        playhead_x = int(self.current_position * pps)
+                self.step_rect_items[i] = clip
+                self.step_text_items[i] = text
+                self._update_step_item(i)
+
+        self._create_playhead_items()
+        self.update_playhead()
+
+    def update_scene(self):
+        """Compatibility wrapper for existing callers."""
+        self.rebuild_scene()
+
+    def _step_clip_width(self) -> int:
+        pps = self.pixels_per_second * self.zoom_scale
+        return max(30, int(pps * 0.5))
+
+    def _update_step_item(self, step_idx: int):
+        if not self.tutorial or step_idx not in self.step_rect_items or step_idx >= len(self.tutorial.steps):
+            return
+
+        pps = self.pixels_per_second * self.zoom_scale
+        clip_w = self._step_clip_width()
+        step = self.tutorial.steps[step_idx]
+        x = int(step.timestamp * pps)
+
+        if step.action_type == "keyboard":
+            clip_color = QColor(0, 120, 200)
+        else:
+            clip_color = QColor(200, 100, 0)
+
+        if self.selected_step_index == step_idx:
+            border_pen = QPen(QColor(255, 255, 0), 3)
+        else:
+            border_pen = QPen(QColor(255, 255, 255, 100), 1)
+
+        rect_item = self.step_rect_items[step_idx]
+        rect_item.setRect(x, self.track_clip_y, clip_w, self.track_clip_h)
+        rect_item.setPen(border_pen)
+        rect_item.setBrush(QBrush(clip_color))
+        rect_item.setData(0, step_idx)
+
+        text_item = self.step_text_items[step_idx]
+        text_item.setPlainText(str(step_idx + 1))
+        text_item.setPos(x + 4, self.track_clip_y)
+
+    def refresh_step_items(self):
+        if not self.tutorial:
+            return
+        for i in range(len(self.tutorial.steps)):
+            self._update_step_item(i)
+
+    def _create_playhead_items(self):
         playhead_pen = QPen(QColor(255, 0, 0), 2)
-        self.scene.addLine(playhead_x, 0, playhead_x, total_height, playhead_pen)
-        
-        # Playhead triangle
+        self.playhead_line_item = self.scene.addLine(0, 0, 0, self.total_height, playhead_pen)
         from PySide6.QtGui import QPolygonF
-        triangle_points = [
-            QPointF(playhead_x - 6, 0),
-            QPointF(playhead_x + 6, 0),
-            QPointF(playhead_x, 10)
-        ]
-        triangle = QPolygonF(triangle_points)
-        self.scene.addPolygon(triangle, QPen(Qt.PenStyle.NoPen), QBrush(QColor(255, 0, 0)))
+        triangle = QPolygonF([QPointF(-6, 0), QPointF(6, 0), QPointF(0, 10)])
+        self.playhead_triangle_item = self.scene.addPolygon(
+            triangle,
+            QPen(Qt.PenStyle.NoPen),
+            QBrush(QColor(255, 0, 0))
+        )
+
+    def update_playhead(self):
+        if not self.playhead_line_item or not self.playhead_triangle_item:
+            return
+        pps = self.pixels_per_second * self.zoom_scale
+        playhead_x = int(self.current_position * pps)
+        self.playhead_line_item.setLine(playhead_x, 0, playhead_x, self.total_height)
+        self.playhead_triangle_item.setPos(playhead_x, 0)
         
     def on_timeline_clicked(self, position):
         """Called when timeline is clicked."""
         self.current_position = max(0, min(position, self.video_duration))
         self.update_time_label()
         self.position_changed.emit(self.current_position)
-        self.update_scene()
+        self.update_playhead()
             
     def update_time_label(self):
         # Time label was removed - just update zoom label if needed
@@ -990,7 +1039,7 @@ class TimelineWidget(QWidget):
             self.current_position += 1.0 / self.fps
             self.update_time_label()
             self.position_changed.emit(self.current_position)
-            self.update_scene()
+            self.update_playhead()
             
             # Auto-scroll to keep playhead visible
             pps = self.pixels_per_second * self.zoom_scale
@@ -1046,7 +1095,7 @@ class TimelineWidget(QWidget):
         
         self.tutorial.steps.insert(insert_idx, new_step)
         self.step_added.emit(timestamp)
-        self.update_scene()
+        self.rebuild_scene()
         
     def keyPressEvent(self, event):
         """Handle keyboard shortcuts."""
@@ -1067,25 +1116,25 @@ class TimelineWidget(QWidget):
             # Go to start
             self.current_position = 0
             self.position_changed.emit(self.current_position)
-            self.update_scene()
+            self.update_playhead()
             event.accept()
         elif matches("frame_end"):
             # Go to end
             self.current_position = self.video_duration
             self.position_changed.emit(self.current_position)
-            self.update_scene()
+            self.update_playhead()
             event.accept()
         elif matches("frame_prev"):
             # Move back 1 second
             self.current_position = max(0, self.current_position - 1.0)
             self.position_changed.emit(self.current_position)
-            self.update_scene()
+            self.update_playhead()
             event.accept()
         elif matches("frame_next"):
             # Move forward 1 second
             self.current_position = min(self.video_duration, self.current_position + 1.0)
             self.position_changed.emit(self.current_position)
-            self.update_scene()
+            self.update_playhead()
             event.accept()
         else:
             super().keyPressEvent(event)
@@ -1140,11 +1189,12 @@ class TimelineGraphicsView(QGraphicsView):
                 self.drag_start_x = scene_pos.x()
                 self.drag_original_timestamp = self.timeline_widget.tutorial.steps[step_idx].timestamp
                 
-                self.timeline_widget.update_scene()
+                self.timeline_widget.refresh_step_items()
             else:
                 # Clicked on empty area - deselect and move playhead
                 self.timeline_widget.selected_step_index = -1
                 self.dragging_step = None
+                self.timeline_widget.refresh_step_items()
                 position = scene_pos.x() / pps
                 self.timeline_widget.on_timeline_clicked(position)
                 
@@ -1161,17 +1211,15 @@ class TimelineGraphicsView(QGraphicsView):
             # Update step timestamp
             if 0 <= self.dragging_step < len(self.timeline_widget.tutorial.steps):
                 self.timeline_widget.tutorial.steps[self.dragging_step].timestamp = new_timestamp
-                # Just update scene for visual feedback
-                self.timeline_widget.update_scene()
+                self.timeline_widget._update_step_item(self.dragging_step)
                 
         super().mouseMoveEvent(event)
         
     def mouseReleaseEvent(self, event):
         if self.dragging_step is not None:
             # Re-sort steps by timestamp after drag
-            # Re-sort steps by timestamp after drag
             self.timeline_widget.tutorial.steps.sort(key=lambda s: s.timestamp)
-            self.timeline_widget.update_scene()
+            self.timeline_widget.rebuild_scene()
             
             # Emit reordered signal so Editor can refresh list
             self.timeline_widget.steps_reordered.emit()
@@ -1196,7 +1244,7 @@ class TimelineGraphicsView(QGraphicsView):
             # Select the step
             self.timeline_widget.selected_step_index = step_idx
             self.timeline_widget.step_selected.emit(step_idx)
-            self.timeline_widget.update_scene()
+            self.timeline_widget.refresh_step_items()
             
             # Step info header
             menu.addAction(f"📍 Step {step_idx + 1}: {step.description[:20]}...").setEnabled(False)
@@ -1274,7 +1322,7 @@ class TimelineGraphicsView(QGraphicsView):
             
             self.timeline_widget.tutorial.steps.append(new_step)
             self.timeline_widget.tutorial.steps.sort(key=lambda s: s.timestamp)
-            self.timeline_widget.update_scene()
+            self.timeline_widget.rebuild_scene()
             self.timeline_widget.step_added.emit(timestamp)
             print(f"Pasted step at {timestamp:.2f}s")
             
@@ -1286,7 +1334,7 @@ class TimelineGraphicsView(QGraphicsView):
             step = self.timeline_widget.tutorial.steps[step_idx]
             step.timestamp = max(0, step.timestamp + delta_seconds)
             self.timeline_widget.tutorial.steps.sort(key=lambda s: s.timestamp)
-            self.timeline_widget.update_scene()
+            self.timeline_widget.rebuild_scene()
             self.timeline_widget.steps_reordered.emit()
             
     def delete_step(self, step_idx):
@@ -1692,6 +1740,7 @@ class Editor(QMainWindow):
         self.refresh()
 
     def refresh(self):
+        previous_row = self.step_list.currentRow()
         self.step_list.clear()
         for i, step in enumerate(self.tutorial.steps):
             self.step_list.addItem(f"Step {i+1}: {step.description}")
@@ -1701,12 +1750,31 @@ class Editor(QMainWindow):
         self.view_mode = "video" if has_video else "screenshot"
             
         if self.tutorial.steps:
-            self.step_list.setCurrentRow(0)
+            target_row = previous_row if 0 <= previous_row < len(self.tutorial.steps) else 0
+            self.set_current_step(target_row)
+        else:
+            self.timeline.selected_step_index = -1
+            self.timeline.refresh_step_items()
             
     def select_step(self, index):
-        """Select step in list widget."""
-        if 0 <= index < self.step_list.count():
+        """Select step from timeline or other external source."""
+        self.set_current_step(index)
+
+    def set_current_step(self, index: int):
+        """Synchronize selected step across list, timeline, and preview."""
+        if index < 0 or index >= len(self.tutorial.steps) or index >= self.step_list.count():
+            return
+
+        with QSignalBlocker(self.step_list):
             self.step_list.setCurrentRow(index)
+
+        item = self.step_list.item(index)
+        if item is not None:
+            item.setSelected(True)
+
+        self.timeline.selected_step_index = index
+        self.timeline.refresh_step_items()
+        self.load_step(index)
 
     def load_step(self, index):
         if index < 0 or index >= len(self.tutorial.steps):
@@ -1889,6 +1957,18 @@ class Editor(QMainWindow):
         """Handle selection change for multi-select."""
         selected = self.get_selected_indices()
         count = len(selected)
+
+        if count == 1:
+            index = selected[0]
+            self.timeline.selected_step_index = index
+            self.timeline.refresh_step_items()
+            if self.step_list.currentRow() != index:
+                with QSignalBlocker(self.step_list):
+                    self.step_list.setCurrentRow(index)
+                self.load_step(index)
+        elif count == 0:
+            self.timeline.selected_step_index = -1
+            self.timeline.refresh_step_items()
         
         # Update Properties panel title to show selection count
         if count > 1:
@@ -2214,14 +2294,18 @@ class Editor(QMainWindow):
         self.tutorial.steps.sort(key=lambda s: s.timestamp) # Ensure sorted
         
         self.refresh()
-        self.step_list.setCurrentRow(insert_idx)
-        self.timeline.update_scene() # Explicit scene update
+        actual_index = self.tutorial.steps.index(new_step)
+        self.set_current_step(actual_index)
+        self.timeline.rebuild_scene()
         self.save_state()  # Save state after adding step
         
     def on_steps_reordered(self):
         """Handle steps reordered in timeline via drag-drop."""
         # Refresh list to match new order
+        current_index = self.timeline.selected_step_index
         self.refresh()
+        if 0 <= current_index < len(self.tutorial.steps):
+            self.set_current_step(current_index)
         self.save_state()
         
     def on_delete_step(self, index):
@@ -2229,8 +2313,12 @@ class Editor(QMainWindow):
         if 0 <= index < len(self.tutorial.steps):
             del self.tutorial.steps[index]
             self.refresh()
-            self.timeline.selected_step_index = -1
-            self.timeline.update_scene() # Explicit scene update
+            if self.tutorial.steps:
+                next_index = min(index, len(self.tutorial.steps) - 1)
+                self.set_current_step(next_index)
+            else:
+                self.timeline.selected_step_index = -1
+                self.timeline.refresh_step_items()
             self.save_state()  # Save state after deletion
 
     # ==================== Undo/Redo System ====================
