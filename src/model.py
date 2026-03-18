@@ -1,7 +1,8 @@
 import json
 import uuid
 from typing import List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+from .key_utils import is_special_key_name
 
 class Step(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -18,6 +19,7 @@ class Step(BaseModel):
     sound_enabled: bool = True
     timestamp: float = 0.0 # Time in seconds from start of video
     keyboard_input: str = ""  # For keyboard steps: required input text
+    keyboard_mode: str = "text"  # text, key
     # Text style settings
     text_font_size: int = 24
     text_color: str = "#FFFFFF"
@@ -28,6 +30,17 @@ class Step(BaseModel):
     hitbox_line_color: str = "#FF0000"  # Line color (hex)
     hitbox_fill_color: str = "#FF0000"   # Background color (hex RGB)
     hitbox_fill_opacity: int = 20        # Fill opacity (0-100%)
+
+    @model_validator(mode="after")
+    def normalize_keyboard_mode(self):
+        if self.action_type != "keyboard":
+            return self
+
+        mode = (self.keyboard_mode or "").strip().lower()
+        if mode not in {"text", "key"}:
+            mode = "key" if is_special_key_name(self.keyboard_input) else "text"
+        self.keyboard_mode = mode
+        return self
     
 class Tutorial(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))

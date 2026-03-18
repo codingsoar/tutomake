@@ -6,6 +6,7 @@ import winsound
 import os
 import cv2
 import numpy as np
+from ..key_utils import display_key_name, is_special_key_name, normalize_key_name
 from ..model import Tutorial
 
 
@@ -540,6 +541,89 @@ class Player(QWidget):
             print("Running in Screenshot mode")
             self.update_image_mode()
 
+    def _qt_key_to_name(self, key: int) -> str | None:
+        if key == Qt.Key.Key_Delete:
+            return "delete"
+        if key == Qt.Key.Key_Backspace:
+            return "backspace"
+        if key == Qt.Key.Key_Tab:
+            return "tab"
+        if key == Qt.Key.Key_Escape:
+            return "esc"
+        if key == Qt.Key.Key_Return or key == Qt.Key.Key_Enter:
+            return "enter"
+        if key == Qt.Key.Key_Space:
+            return "space"
+        if key == Qt.Key.Key_Up:
+            return "up"
+        if key == Qt.Key.Key_Down:
+            return "down"
+        if key == Qt.Key.Key_Left:
+            return "left"
+        if key == Qt.Key.Key_Right:
+            return "right"
+        if key == Qt.Key.Key_Home:
+            return "home"
+        if key == Qt.Key.Key_End:
+            return "end"
+        if key == Qt.Key.Key_PageUp:
+            return "pageup"
+        if key == Qt.Key.Key_PageDown:
+            return "pagedown"
+        if key == Qt.Key.Key_Insert:
+            return "insert"
+        if Qt.Key.Key_F1 <= key <= Qt.Key.Key_F12:
+            return f"f{key - Qt.Key.Key_F1 + 1}"
+        return None
+
+    def _expected_keyboard_input(self, step) -> str:
+        return normalize_key_name(step.keyboard_input or "")
+
+    def _is_special_keyboard_step(self, step) -> bool:
+        if step.action_type != "keyboard":
+            return False
+        if getattr(step, "keyboard_mode", "text") == "key":
+            return True
+        return is_special_key_name(step.keyboard_input or "")
+
+    def _complete_current_step(self):
+        if self.current_step_index >= len(self.tutorial.steps):
+            return
+        step = self.tutorial.steps[self.current_step_index]
+        if step.sound_enabled:
+            winsound.MessageBeep(winsound.MB_OK)
+        self.text_input.hide()
+        self.next_step()
+
+    def _handle_step_key_press(self, event) -> bool:
+        print(f"Player._handle_step_key_press: key={event.key()}, waiting={self.waiting_for_click}")
+
+        if self.current_step_index >= len(self.tutorial.steps):
+            return False
+
+        step = self.tutorial.steps[self.current_step_index]
+        if step.action_type != "keyboard" or not step.keyboard_input or not self.waiting_for_click:
+            return False
+
+        key_name = self._qt_key_to_name(event.key())
+        expected = self._expected_keyboard_input(step)
+        print(f"  key_name={key_name}, expected={expected}, raw='{step.keyboard_input}'")
+
+        if self._is_special_keyboard_step(step):
+            if key_name and key_name == expected:
+                print("  MATCH! Advancing to next step.")
+                self._complete_current_step()
+                event.accept()
+                return True
+            return False
+
+        if event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            print("  Submit key pressed for regular text step")
+            self.on_text_submitted()
+            return True
+
+        return False
+
     def init_ui(self):
         self.setWindowTitle("TutoMake Player")
         # Ensure it is really on top
@@ -687,30 +771,14 @@ class Player(QWidget):
             
             if step.action_type == "keyboard":
                 # Check if it's a special key step
-                expected = (step.keyboard_input or "").lower().strip()
-                
-                # Remove "Key." prefix if present (from pynput recording)
-                if expected.startswith("key."):
-                    expected = expected[4:]
-                
-                special_keys = ['delete', 'backspace', 'tab', 'esc', 'escape', 'enter', 'return', 
-                               'space', 'up', 'down', 'left', 'right', 'home', 'end', 'pageup', 'pagedown',
-                               'insert', 'capslock', 'numlock', 'scrolllock', 'pause', 'printscreen',
-                               'ctrl', 'ctrl_l', 'ctrl_r', 'alt', 'alt_l', 'alt_r', 'shift', 'shift_l', 'shift_r',
-                               'cmd', 'cmd_l', 'cmd_r', 'page_up', 'page_down']
-                               
-                # Check if it's a special key or F-key
-                is_fkey = expected.startswith('f') and len(expected) >= 2 and expected[1:].isdigit()
-                is_special = expected in special_keys or is_fkey
-                
-                if is_special:
+                if self._is_special_keyboard_step(step):
                     # For special keys, HIDE text input and let Player handle keys directly
                     self.text_input.hide()
                     self.video_widget.set_overlay_state(step, True)  # Show hitbox as visual hint
                     # Ensure Player receives keyboard events
                     self.setFocus()
                     self.activateWindow()
-                    print(f"Special key step: waiting for '{step.keyboard_input}', Player has focus={self.hasFocus()}")
+                    print(f"Special key step: waiting for '{self._expected_keyboard_input(step)}', Player has focus={self.hasFocus()}")
                 else:
                     # Normal text input
                     self.video_widget.set_overlay_state(None, False)
@@ -730,11 +798,6 @@ class Player(QWidget):
                 self.text_input.hide()
                 self.video_widget.set_overlay_state(step, True)
 
-    def on_text_submitted(self):
-        """Called when user presses Enter in text input."""
-        if self.current_step_index >= len(self.tutorial.steps):
-            return
-
     def eventFilter(self, obj, event):
         """Intercept keyboard events from text_input to handle special keys."""
         from PySide6.QtCore import QEvent
@@ -742,168 +805,10 @@ class Player(QWidget):
         if obj == self.text_input and event.type() == QEvent.Type.KeyPress:
             print(f"eventFilter: KeyPress from text_input, key={event.key()}")
             
-            # Check if current step is a keyboard step with special key
-            if self.current_step_index < len(self.tutorial.steps):
-                step = self.tutorial.steps[self.current_step_index]
-                
-                if step.action_type == "keyboard" and step.keyboard_input:
-                    expected = step.keyboard_input.lower().strip()
-                    if expected.startswith("key."):
-                        expected = expected[4:]
-                    
-                    # Key alias mapping
-                    key_aliases = {
-                        "escape": "esc", "return": "enter", "del": "delete",
-                        "page_up": "pageup", "page_down": "pagedown"
-                    }
-                    expected = key_aliases.get(expected, expected)
-                    
-                    # Check if it's a special key
-                    special_keys = ['delete', 'backspace', 'tab', 'esc', 'enter', 'space',
-                                   'up', 'down', 'left', 'right', 'home', 'end', 'pageup', 'pagedown', 'insert']
-                    is_fkey = expected.startswith('f') and len(expected) >= 2 and expected[1:].isdigit()
-                    is_special = expected in special_keys or is_fkey
-                    
-                    if is_special:
-                        # Map pressed key to name
-                        key_name = None
-                        if event.key() == Qt.Key.Key_Delete: key_name = "delete"
-                        elif event.key() == Qt.Key.Key_Backspace: key_name = "backspace"
-                        elif event.key() == Qt.Key.Key_Tab: key_name = "tab"
-                        elif event.key() == Qt.Key.Key_Escape: key_name = "esc"
-                        elif event.key() == Qt.Key.Key_Return or event.key() == Qt.Key.Key_Enter: key_name = "enter"
-                        elif event.key() == Qt.Key.Key_Space: key_name = "space"
-                        elif event.key() == Qt.Key.Key_Up: key_name = "up"
-                        elif event.key() == Qt.Key.Key_Down: key_name = "down"
-                        elif event.key() == Qt.Key.Key_Left: key_name = "left"
-                        elif event.key() == Qt.Key.Key_Right: key_name = "right"
-                        elif event.key() == Qt.Key.Key_Home: key_name = "home"
-                        elif event.key() == Qt.Key.Key_End: key_name = "end"
-                        elif event.key() == Qt.Key.Key_PageUp: key_name = "pageup"
-                        elif event.key() == Qt.Key.Key_PageDown: key_name = "pagedown"
-                        elif event.key() == Qt.Key.Key_Insert: key_name = "insert"
-                        elif event.key() >= Qt.Key.Key_F1 and event.key() <= Qt.Key.Key_F12:
-                            key_name = f"f{event.key() - Qt.Key.Key_F1 + 1}"
-                        
-                        print(f"  key_name={key_name}, expected={expected}")
-                        
-                        if key_name and key_name == expected:
-                            print(f"  MATCH! Advancing to next step.")
-                            if step.sound_enabled:
-                                winsound.MessageBeep(winsound.MB_OK)
-                            self.text_input.hide()
-                            self.next_step()
-                            return True  # Event handled
-                    else:
-                        # Regular text step - Space or Enter submits the input
-                        if event.key() == Qt.Key.Key_Space or event.key() == Qt.Key.Key_Return or event.key() == Qt.Key.Key_Enter:
-                            print(f"  Submit key pressed for regular text step")
-                            self.on_text_submitted()
-                            return True  # Event handled
+            if self._handle_step_key_press(event):
+                return True
         
         return super().eventFilter(obj, event)
-
-    def keyPressEvent(self, event):
-        """Handle key press events for player navigation."""
-        print(f"Player.keyPressEvent: key={event.key()}, waiting={self.waiting_for_click}")
-        
-        if self.current_step_index < len(self.tutorial.steps):
-            step = self.tutorial.steps[self.current_step_index]
-            
-            # Map Qt key to name
-            key_name = None
-            if event.key() == Qt.Key.Key_Delete: key_name = "delete"
-            elif event.key() == Qt.Key.Key_Backspace: key_name = "backspace"
-            elif event.key() == Qt.Key.Key_Tab: key_name = "tab"
-            elif event.key() == Qt.Key.Key_Escape: key_name = "esc"
-            elif event.key() == Qt.Key.Key_Return or event.key() == Qt.Key.Key_Enter: key_name = "enter"
-            elif event.key() == Qt.Key.Key_Space: key_name = "space"
-            elif event.key() == Qt.Key.Key_Up: key_name = "up"
-            elif event.key() == Qt.Key.Key_Down: key_name = "down"
-            elif event.key() == Qt.Key.Key_Left: key_name = "left"
-            elif event.key() == Qt.Key.Key_Right: key_name = "right"
-            elif event.key() == Qt.Key.Key_Home: key_name = "home"
-            elif event.key() == Qt.Key.Key_End: key_name = "end"
-            elif event.key() == Qt.Key.Key_PageUp: key_name = "pageup"
-            elif event.key() == Qt.Key.Key_PageDown: key_name = "pagedown"
-            elif event.key() == Qt.Key.Key_Insert: key_name = "insert"
-            elif event.key() >= Qt.Key.Key_F1 and event.key() <= Qt.Key.Key_F12:
-                key_name = f"f{event.key() - Qt.Key.Key_F1 + 1}"
-            
-            print(f"  key_name={key_name}, step.action_type={step.action_type}, step.keyboard_input='{step.keyboard_input}'")
-            
-            # If the current step is a keyboard step and we're waiting
-            if step.action_type == "keyboard" and step.keyboard_input and self.waiting_for_click:
-                expected = step.keyboard_input.lower().strip()
-                
-                # Remove "Key." prefix if present (from pynput recording)
-                if expected.startswith("key."):
-                    expected = expected[4:]
-                
-                # Normalize key aliases
-                key_aliases = {
-                    "escape": "esc",
-                    "return": "enter",
-                    "del": "delete",
-                    "backspace": "backspace",
-                    "page_up": "pageup",
-                    "page_down": "pagedown",
-                    "caps_lock": "capslock",
-                    "num_lock": "numlock",
-                    "scroll_lock": "scrolllock",
-                    "print_screen": "printscreen",
-                    "ctrl": "control",
-                    "ctrl_l": "control",
-                    "ctrl_r": "control",
-                    "alt": "alt",
-                    "alt_l": "alt",
-                    "alt_r": "alt",
-                    "shift": "shift",
-                    "shift_l": "shift",
-                    "shift_r": "shift",
-                }
-                expected = key_aliases.get(expected, expected)
-                
-                # Also check if key_name needs normalization
-                key_name_normalized = key_aliases.get(key_name, key_name) if key_name else None
-                
-                print(f"  expected (normalized)='{expected}', key_name_normalized='{key_name_normalized}'")
-                
-                # Check if this is a special key step
-                special_keys_list = ['delete', 'backspace', 'tab', 'esc', 'enter', 'space',
-                                    'up', 'down', 'left', 'right', 'home', 'end', 
-                                    'pageup', 'pagedown', 'insert', 'capslock', 'numlock',
-                                    'scrolllock', 'pause', 'printscreen', 'control', 'alt', 'shift']
-                is_fkey_expected = expected.startswith('f') and len(expected) >= 2 and expected[1:].isdigit()
-                is_special_step = expected in special_keys_list or is_fkey_expected
-                
-                # For special key steps: any special key press advances to next step
-                # For text steps requiring special key: exact match required
-                if is_special_step and key_name:
-                    # Special key step - any special key advances
-                    print(f"  Special key step - any special key advances! (pressed: {key_name})")
-                    if step.sound_enabled:
-                        winsound.MessageBeep(winsound.MB_OK)
-                    self.text_input.hide()
-                    self.next_step()
-                    event.accept()
-                    return
-                elif key_name and (key_name == expected or key_name_normalized == expected):
-                    # Exact match for non-special steps
-                    print(f"  MATCH! Advancing to next step.")
-                    if step.sound_enabled:
-                        winsound.MessageBeep(winsound.MB_OK)
-                    self.text_input.hide()
-                    self.next_step()
-                    event.accept()
-                    return
-        
-        # Let ESC close the player
-        if event.key() == Qt.Key.Key_Escape:
-            self.close()
-            return
-        
-        super().keyPressEvent(event)
 
     def on_text_submitted(self):
         if self.current_step_index >= len(self.tutorial.steps):
@@ -974,20 +879,8 @@ class Player(QWidget):
             # Show/Hide text input based on step type
             if step.action_type == "keyboard":
                 # Check if it's a special key step - handle Key.xxx format from pynput
-                expected = (step.keyboard_input or "").lower().strip()
-                if expected.startswith("key."):
-                    expected = expected[4:]
-                    
-                special_keys = ['delete', 'backspace', 'tab', 'esc', 'escape', 'enter', 'return', 
-                               'space', 'up', 'down', 'left', 'right', 'home', 'end', 'pageup', 'pagedown',
-                               'insert', 'capslock', 'numlock', 'scrolllock', 'pause', 'printscreen',
-                               'ctrl', 'ctrl_l', 'ctrl_r', 'alt', 'alt_l', 'alt_r', 'shift', 'shift_l', 'shift_r',
-                               'cmd', 'cmd_l', 'cmd_r', 'page_up', 'page_down']
-                is_fkey = expected.startswith('f') and len(expected) >= 2 and expected[1:].isdigit()
-                is_special = expected in special_keys or is_fkey
-                
-                if is_special:
-                    self.text_input.setPlaceholderText(f"Press {step.keyboard_input}...")
+                if self._is_special_keyboard_step(step):
+                    self.text_input.setPlaceholderText(f"Press {display_key_name(step.keyboard_input)}...")
                     self.text_input.setText("")
                     self.text_input.setReadOnly(True)
                     self.text_input.show()
@@ -1054,6 +947,23 @@ class Player(QWidget):
             if self.cap: self.cap.release()
             self.timer.stop()
             self.close()
+            return
+
+        if self._handle_step_key_press(event):
+            return
+
+        current_step = (
+            self.tutorial.steps[self.current_step_index]
+            if self.current_step_index < len(self.tutorial.steps)
+            else None
+        )
+        if event.key() == Qt.Key.Key_Escape and not (
+            current_step and self._is_special_keyboard_step(current_step)
+        ):
+            self.close()
+            return
+
+        super().keyPressEvent(event)
             
     def closeEvent(self, event):
         self.stop_audio()  # Stop audio playback

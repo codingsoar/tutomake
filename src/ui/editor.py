@@ -7,6 +7,7 @@ from PySide6.QtGui import QPixmap, QPainter, QPen, QColor, QResizeEvent, QImage,
 from PySide6.QtCore import Qt, QRect, QTimer, Signal, QPoint, QRectF, QPointF
 import os
 import cv2
+from ..key_utils import display_key_name
 from ..model import Tutorial, Step
 
 class ZoomableImageCanvas(QWidget):
@@ -1034,6 +1035,7 @@ class TimelineWidget(QWidget):
             description="Type text",
             timestamp=timestamp,
             keyboard_input="",
+            keyboard_mode="text",
         )
         
         insert_idx = 0
@@ -1425,6 +1427,13 @@ class Editor(QMainWindow):
         props_layout.addRow("", self.chk_sound)
         
         # Text Input (for keyboard steps)
+        from PySide6.QtWidgets import QComboBox, QSpinBox
+        self.keyboard_mode_combo = QComboBox()
+        self.keyboard_mode_combo.addItem("Text Input", "text")
+        self.keyboard_mode_combo.addItem("Key Input", "key")
+        self.keyboard_mode_combo.currentIndexChanged.connect(self.update_keyboard_mode)
+        props_layout.addRow("Input Type:", self.keyboard_mode_combo)
+
         self.text_content = QLineEdit()
         self.text_content.setPlaceholderText("Expected keyboard input")
         self.text_content.textChanged.connect(self.update_keyboard_input_preview)
@@ -1438,7 +1447,6 @@ class Editor(QMainWindow):
         props_layout.addRow(text_style_label)
         
         # Font Family Dropdown (all system fonts)
-        from PySide6.QtWidgets import QComboBox, QSpinBox
         from PySide6.QtGui import QFontDatabase
         self.font_family_combo = QComboBox()
         font_families = QFontDatabase.families()
@@ -1732,10 +1740,22 @@ class Editor(QMainWindow):
         
         # Text settings
         is_keyboard = step.action_type == "keyboard"
+        self.keyboard_mode_combo.blockSignals(True)
+        mode_index = self.keyboard_mode_combo.findData(step.keyboard_mode)
+        self.keyboard_mode_combo.setCurrentIndex(mode_index if mode_index >= 0 else 0)
+        self.keyboard_mode_combo.blockSignals(False)
+        self.keyboard_mode_combo.setEnabled(is_keyboard)
+
         self.text_content.blockSignals(True)
         self.text_content.setText(step.keyboard_input)
         self.text_content.blockSignals(False)
         self.text_content.setEnabled(is_keyboard)
+        if is_keyboard:
+            self.text_content.setPlaceholderText(
+                "Literal text to type"
+                if step.keyboard_mode == "text"
+                else "Key name like esc, enter, f5, left"
+            )
         
         self.font_size_spinbox.blockSignals(True)
         self.font_size_spinbox.setValue(step.text_font_size)
@@ -1913,9 +1933,40 @@ class Editor(QMainWindow):
         
         for idx in selected:
             if 0 <= idx < len(self.tutorial.steps):
-                self.tutorial.steps[idx].keyboard_input = text
+                step = self.tutorial.steps[idx]
+                step.keyboard_input = text
+                if step.action_type == "keyboard" and step.keyboard_mode == "key" and text:
+                    step.description = f"Press {display_key_name(text)}"
         
         self.canvas.update()
+
+    def update_keyboard_mode(self):
+        """Switch selected keyboard steps between text input and key input."""
+        selected = self.get_selected_indices()
+        if not selected:
+            return
+
+        mode = self.keyboard_mode_combo.currentData()
+        self.text_content.setPlaceholderText(
+            "Literal text to type"
+            if mode == "text"
+            else "Key name like esc, enter, f5, left"
+        )
+
+        for idx in selected:
+            if 0 <= idx < len(self.tutorial.steps):
+                step = self.tutorial.steps[idx]
+                if step.action_type != "keyboard":
+                    continue
+                step.keyboard_mode = mode
+                if mode == "key" and step.keyboard_input:
+                    step.description = f"Press {display_key_name(step.keyboard_input)}"
+                elif mode == "text" and step.description.startswith("Press "):
+                    step.description = "Type text"
+
+        self.refresh_ui()
+        self.canvas.update()
+        self.save_state()
     
     def update_text_style_preview(self):
         """Update text style for all selected steps."""
@@ -2148,6 +2199,7 @@ class Editor(QMainWindow):
             width=50,
             height=50,
             description=desc,
+            keyboard_mode="text",
             timestamp=timestamp
         )
         

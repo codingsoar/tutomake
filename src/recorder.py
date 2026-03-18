@@ -8,6 +8,7 @@ from datetime import datetime
 import os
 import cv2
 import numpy as np
+from .key_utils import display_key_name, normalize_key_name
 from .model import Step, Tutorial
 
 # Audio recording support
@@ -439,18 +440,18 @@ class Recorder:
                     
             # Handle special keys as separate steps
             elif key == keyboard.Key.delete:
-                self._save_special_key_step("Delete")
+                self._save_special_key_step("delete")
             elif key == keyboard.Key.tab:
-                self._save_special_key_step("Tab")
+                self._save_special_key_step("tab")
             elif key == keyboard.Key.esc:
-                self._save_special_key_step("Escape")
+                self._save_special_key_step("esc")
             elif hasattr(key, 'name') and key.name:
                 # Handle F-keys and arrow keys
                 key_name = key.name
                 if key_name.startswith('f') and key_name[1:].isdigit():
-                    self._save_special_key_step(key_name.upper())  # F1, F2...
+                    self._save_special_key_step(key_name)
                 elif key_name in ['up', 'down', 'left', 'right']:
-                    self._save_special_key_step(f"Arrow{key_name.capitalize()}")
+                    self._save_special_key_step(key_name)
                     
         except AttributeError:
             pass  # Special keys we don't handle
@@ -474,6 +475,7 @@ class Recorder:
             y=100,
             description="Type text",
             keyboard_input=self.key_buffer,
+            keyboard_mode="text",
             timestamp=timestamp
         )
         
@@ -497,13 +499,15 @@ class Recorder:
     def _save_special_key_step(self, key_name):
         """Save a special key press as a keyboard step."""
         timestamp = self._get_current_video_time()
+        normalized_key_name = normalize_key_name(key_name)
         
         step = Step(
             action_type="keyboard",
             x=100,
             y=100,
-            description=f"Press {key_name}",
-            keyboard_input=key_name,  # Store key name directly
+            description=f"Press {display_key_name(normalized_key_name)}",
+            keyboard_input=normalized_key_name,
+            keyboard_mode="key",
             timestamp=timestamp
         )
         
@@ -515,7 +519,7 @@ class Recorder:
             insert_idx = i + 1
         
         self.tutorial.steps.insert(insert_idx, step)
-        print(f"Captured special key: {key_name} (timestamp={timestamp:.3f}s)")
+        print(f"Captured special key: {normalized_key_name} (timestamp={timestamp:.3f}s)")
         
         if self.on_step_callback:
             self.on_step_callback(step)

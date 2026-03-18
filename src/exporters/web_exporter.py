@@ -33,6 +33,7 @@ class WebExporter:
                 'width': step.width,
                 'height': step.height,
                 'shape': step.shape,
+                'keyboard_mode': step.keyboard_mode,
                 'keyboard_input': step.keyboard_input,
                 'image': ''
             }
@@ -483,13 +484,43 @@ class WebExporter:
         
         function showKeyboardModal(step) {{
             keyboardModal.classList.add('active');
-            modalHint.textContent = `Type: "${{step.keyboard_input}}"`;
             modalInput.value = '';
             modalInput.className = 'modal-input';
-            modalInput.focus();
+            
+            let expectedInput = step.keyboard_input.toLowerCase().trim();
+            if (expectedInput.startsWith('key.')) expectedInput = expectedInput.substring(4);
+            
+            const keyAliases = {{
+                'escape': 'esc',
+                'return': 'enter',
+                'del': 'delete',
+                'arrowup': 'up',
+                'arrowdown': 'down',
+                'arrowleft': 'left',
+                'arrowright': 'right',
+                'page_up': 'pageup',
+                'page_down': 'pagedown'
+            }};
+            expectedInput = keyAliases[expectedInput] || expectedInput;
+            
+            const specialKeys = ['delete', 'backspace', 'tab', 'esc', 'enter', 'space',
+                'up', 'down', 'left', 'right', 'home', 'end', 'pageup', 'pagedown',
+                'insert', 'capslock', 'numlock', 'scrolllock', 'pause', 'printscreen',
+                'ctrl', 'alt', 'shift', 'cmd'];
+            const isFkey = expectedInput.startsWith('f') && expectedInput.length > 1 && !isNaN(expectedInput.substring(1));
+            const inferredSpecial = specialKeys.includes(expectedInput) || isFkey;
+            const isSpecial = (step.keyboard_mode || '') === 'key' || inferredSpecial;
+            
+            if (isSpecial) {{
+                modalHint.textContent = `Press: ${{step.keyboard_input}}`;
+                modalInput.style.display = 'none';
+            }} else {{
+                modalHint.textContent = `Type: "${{step.keyboard_input}}"`;
+                modalInput.style.display = 'block';
+                modalInput.focus();
+            }}
             
             modalInput.onkeydown = function(e) {{
-                // Map JS key names to our Recorder's normalized names
                 let keyName = e.key.toLowerCase();
                 
                 if (e.key === 'Delete') keyName = 'delete';
@@ -502,32 +533,25 @@ class WebExporter:
                 else if (e.key === 'ArrowDown') keyName = 'down';
                 else if (e.key === 'ArrowLeft') keyName = 'left';
                 else if (e.key === 'ArrowRight') keyName = 'right';
-                else if (e.key.startsWith('F') && e.key.length > 1) keyName = e.key.toLowerCase(); // f1, f2...
+                else if (e.key === 'Home') keyName = 'home';
+                else if (e.key === 'End') keyName = 'end';
+                else if (e.key === 'PageUp') keyName = 'pageup';
+                else if (e.key === 'PageDown') keyName = 'pagedown';
+                else if (e.key === 'Insert') keyName = 'insert';
+                else if (e.key.startsWith('F') && e.key.length > 1) keyName = e.key.toLowerCase();
 
-                // Clean up step input for comparison
-                let requiredInput = step.keyboard_input.toLowerCase();
-                if (requiredInput.startsWith('key.')) requiredInput = requiredInput.substring(4);
-                
-                // Allow match against raw key name or bracketed version
-                // Checks: 'delete' vs 'delete', or 'f5' vs 'f5'
-                const isSpecialMatch = (keyName === requiredInput);
-
-                // Handle special keys auto-advance
-                if (['delete', 'backspace', 'tab', 'esc', 'up', 'down', 'left', 'right'].includes(keyName) || 
-                    keyName.startsWith('f')) {{
-                    
-                    if (isSpecialMatch) {{
+                if (isSpecial) {{
+                    if (keyName === expectedInput) {{
                         e.preventDefault();
                         modalInput.className = 'modal-input success';
                         setTimeout(() => {{
                             hideKeyboardModal();
                             nextStep();
                         }}, 200);
-                        return;
                     }}
+                    return;
                 }}
                 
-                // Submit with Enter or Space (only when input matches)
                 if (e.key === 'Enter' || e.key === ' ') {{
                     e.preventDefault();
                     if (modalInput.value === step.keyboard_input) {{
@@ -774,6 +798,7 @@ class WebExporter:
                 'width': step.width,
                 'height': step.height,
                 'shape': step.shape,
+                'keyboard_mode': step.keyboard_mode,
                 'keyboard_input': step.keyboard_input
             }
             steps_data.append(step_info)
@@ -1138,20 +1163,29 @@ class WebExporter:
         function showKeyboardModal(step) {{
             keyboardModal.classList.add('active');
             
-            // Normalize expected input - remove Key. prefix from pynput
             let expectedInput = step.keyboard_input.toLowerCase().trim();
             if (expectedInput.startsWith('key.')) expectedInput = expectedInput.substring(4);
             
-            // Key alias mapping
-            const keyAliases = {{'escape': 'esc', 'return': 'enter', 'del': 'delete', 'page_up': 'pageup', 'page_down': 'pagedown'}};
+            const keyAliases = {{
+                'escape': 'esc',
+                'return': 'enter',
+                'del': 'delete',
+                'arrowup': 'up',
+                'arrowdown': 'down',
+                'arrowleft': 'left',
+                'arrowright': 'right',
+                'page_up': 'pageup',
+                'page_down': 'pagedown'
+            }};
             expectedInput = keyAliases[expectedInput] || expectedInput;
             
-            // Check if it's a special key
-            const specialKeys = ['delete', 'backspace', 'tab', 'esc', 'escape', 'enter', 'return', 
+            const specialKeys = ['delete', 'backspace', 'tab', 'esc', 'enter',
                                'space', 'up', 'down', 'left', 'right', 'home', 'end', 'pageup', 'pagedown',
-                               'insert', 'ctrl', 'alt', 'shift', 'capslock'];
+                               'insert', 'ctrl', 'alt', 'shift', 'cmd', 'capslock', 'numlock',
+                               'scrolllock', 'pause', 'printscreen'];
             const isFkey = expectedInput.startsWith('f') && expectedInput.length >= 2 && !isNaN(expectedInput.substring(1));
-            const isSpecial = specialKeys.includes(expectedInput) || isFkey;
+            const inferredSpecial = specialKeys.includes(expectedInput) || isFkey;
+            const isSpecial = (step.keyboard_mode || '') === 'key' || inferredSpecial;
             
             if (isSpecial) {{
                 modalHint.textContent = `Press: ${{step.keyboard_input}}`;
@@ -1165,7 +1199,6 @@ class WebExporter:
             modalInput.value = '';
             modalInput.className = 'modal-input';
             
-            // Handle keydown for all keys
             document.onkeydown = function(e) {{
                 let keyName = e.key.toLowerCase();
                 if (e.key === 'Delete') keyName = 'delete';
