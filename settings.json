@@ -1,0 +1,17 @@
+{
+    "shortcuts": {
+        "toggle_play": "Space",
+        "frame_prev": "Left",
+        "frame_next": "Right",
+        "frame_start": "Home",
+        "frame_end": "End",
+        "add_click_step": "C",
+        "add_text_step": "T",
+        "delete_step": "Delete",
+        "save": "Ctrl+S",
+        "load": "Ctrl+O",
+        "new": "Ctrl+N",
+        "undo": "Ctrl+Z",
+        "redo": "Ctrl+Y"
+    }
+}
