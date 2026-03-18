@@ -487,6 +487,7 @@ class WebExporter:
             modalInput.value = '';
             modalInput.className = 'modal-input';
             document.onkeydown = null;
+            const customInstruction = (step.instruction || '').trim();
             
             let expectedInput = step.keyboard_input.toLowerCase().trim();
             if (expectedInput.startsWith('key.')) expectedInput = expectedInput.substring(4);
@@ -513,10 +514,10 @@ class WebExporter:
             const isSpecial = (step.keyboard_mode || '') === 'key' || inferredSpecial;
             
             if (isSpecial) {{
-                modalHint.textContent = `Press: ${{step.keyboard_input}}`;
+                modalHint.textContent = customInstruction || `Press: ${{step.keyboard_input}}`;
                 modalInput.style.display = 'none';
             }} else {{
-                modalHint.textContent = `Type: "${{step.keyboard_input}}"`;
+                modalHint.textContent = customInstruction || `Type: "${{step.keyboard_input}}"`;
                 modalInput.style.display = 'block';
                 modalInput.focus();
             }}
@@ -1166,6 +1167,7 @@ class WebExporter:
         function showKeyboardModal(step) {{
             keyboardModal.classList.add('active');
             document.onkeydown = null;
+            const customInstruction = (step.instruction || '').trim();
             
             let expectedInput = step.keyboard_input.toLowerCase().trim();
             if (expectedInput.startsWith('key.')) expectedInput = expectedInput.substring(4);
@@ -1192,10 +1194,10 @@ class WebExporter:
             const isSpecial = (step.keyboard_mode || '') === 'key' || inferredSpecial;
             
             if (isSpecial) {{
-                modalHint.textContent = `Press: ${{step.keyboard_input}}`;
+                modalHint.textContent = customInstruction || `Press: ${{step.keyboard_input}}`;
                 modalInput.style.display = 'none';
             }} else {{
-                modalHint.textContent = `Type: "${{step.keyboard_input}}"`;
+                modalHint.textContent = customInstruction || `Type: "${{step.keyboard_input}}"`;
                 modalInput.style.display = 'block';
                 modalInput.focus();
             }}
