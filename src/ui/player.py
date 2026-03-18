@@ -480,6 +480,7 @@ class Player(QWidget):
         # Text input for keyboard steps (overlay, not in layout)
         self.text_input = SpecialKeyLineEdit(self)  # Custom class that forwards special keys
         self.text_input.setPlaceholderText("Type the required text and press Enter...")
+        self.text_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.text_input.setStyleSheet("""
             QLineEdit {
                 font-size: 32px;
@@ -587,6 +588,22 @@ class Player(QWidget):
         x = (self.width() - self.text_input.width()) // 2
         y = (self.height() - self.text_input.height()) // 2
         self.text_input.move(x, y)
+
+    def _show_key_input_prompt(self, prompt: str):
+        self.text_input.setReadOnly(True)
+        self.text_input.setText(prompt)
+        self._center_text_input()
+        self.text_input.show()
+        self.text_input.raise_()
+
+    def _show_text_input_prompt(self, placeholder: str):
+        self.text_input.clear()
+        self.text_input.setReadOnly(False)
+        self.text_input.setPlaceholderText(placeholder)
+        self._center_text_input()
+        self.text_input.show()
+        self.text_input.raise_()
+        self.text_input.setFocus()
 
     def _handle_step_key_press(self, event) -> bool:
         print(f"Player._handle_step_key_press: key={event.key()}, waiting={self.waiting_for_click}")
@@ -765,8 +782,8 @@ class Player(QWidget):
             if step.action_type == "keyboard":
                 # Check if it's a special key step
                 if self._is_special_keyboard_step(step):
-                    # For special keys, HIDE text input and let Player handle keys directly
-                    self.text_input.hide()
+                    # Show centered prompt box for key input, but keep focus on Player.
+                    self._show_key_input_prompt(f"Press {display_key_name(step.keyboard_input)}")
                     self.video_widget.set_overlay_state(step, True)  # Show hitbox as visual hint
                     # Ensure Player receives keyboard events
                     self.setFocus()
@@ -775,13 +792,7 @@ class Player(QWidget):
                 else:
                     # Normal text input
                     self.video_widget.set_overlay_state(None, False)
-                    self.text_input.clear()
-                    self.text_input.setReadOnly(False)
-                    self.text_input.setPlaceholderText(f"Type: {step.keyboard_input}")
-                    self._center_text_input()
-                    self.text_input.show()
-                    self.text_input.raise_()
-                    self.text_input.setFocus()
+                    self._show_text_input_prompt(f"Type: {step.keyboard_input}")
                     print(f"Showing text input for: '{step.keyboard_input}' at ({self.text_input.x()}, {self.text_input.y()})")
             else:
                 # Show hitbox for click steps
@@ -870,20 +881,10 @@ class Player(QWidget):
             if step.action_type == "keyboard":
                 # Check if it's a special key step - handle Key.xxx format from pynput
                 if self._is_special_keyboard_step(step):
-                    self.text_input.setPlaceholderText(f"Press {display_key_name(step.keyboard_input)}...")
-                    self.text_input.setText("")
-                    self.text_input.setReadOnly(True)
-                    self._center_text_input()
-                    self.text_input.show()
-                    self.text_input.raise_()
+                    self._show_key_input_prompt(f"Press {display_key_name(step.keyboard_input)}")
                     self.setFocus()  # Keep focus on player for keyPressEvent to work
                 else:
-                    self.text_input.setPlaceholderText("Type here...")
-                    self.text_input.setText("")
-                    self._center_text_input()
-                    self.text_input.show()
-                    self.text_input.raise_()
-                    self.text_input.setFocus()
+                    self._show_text_input_prompt("Type here...")
             else:
                 self.text_input.hide()
 
