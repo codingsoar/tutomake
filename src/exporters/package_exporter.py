@@ -6,6 +6,7 @@ import os
 import json
 import shutil
 import zipfile
+import uuid
 from typing import Callable, Optional
 from ..model import Tutorial
 
@@ -16,14 +17,25 @@ class PackageExporter:
     def __init__(self, tutorial: Tutorial, progress_callback: Optional[Callable[[int], None]] = None):
         self.tutorial = tutorial
         self.progress_callback = progress_callback
+
+    def _get_temp_parent_dir(self, output_path: str) -> str:
+        output_dir = os.path.dirname(output_path)
+        if output_dir and os.path.exists(output_dir):
+            return output_dir
+        return os.getcwd()
+
+    def _make_work_dir(self, output_path: str, prefix: str) -> str:
+        parent_dir = self._get_temp_parent_dir(output_path)
+        work_dir = os.path.join(parent_dir, f"{prefix}_{uuid.uuid4().hex[:8]}")
+        os.makedirs(work_dir, exist_ok=False)
+        return work_dir
     
     def export_scorm(self, output_path: str) -> bool:
         """Export as SCORM 1.2 package for LMS integration."""
-        import tempfile
         from .web_exporter import WebExporter
         
-        # Create temp directory
-        with tempfile.TemporaryDirectory() as temp_dir:
+        temp_dir = self._make_work_dir(output_path, "_scorm_build")
+        try:
             # Export HTML content
             web_exporter = WebExporter(self.tutorial)
             html_path = os.path.join(temp_dir, 'index.html')
@@ -118,7 +130,9 @@ window.onbeforeunload = function() {
             
             if self.progress_callback:
                 self.progress_callback(100)
-        
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
         print(f"Exported SCORM package to: {output_path}")
         return True
     
@@ -180,11 +194,11 @@ For now, double-click the .bat file or open the .html directly.
     
     def create_portable_package(self, output_path: str) -> bool:
         """Create a portable ZIP package with all files."""
-        import tempfile
         from .web_exporter import WebExporter
         from .document_exporter import DocumentExporter
         
-        with tempfile.TemporaryDirectory() as temp_dir:
+        temp_dir = self._make_work_dir(output_path, "_portable_build")
+        try:
             # Export HTML
             web_exporter = WebExporter(self.tutorial)
             web_exporter.export_html(os.path.join(temp_dir, 'tutorial.html'))
@@ -238,6 +252,8 @@ Open tutorial.html in any web browser to view the interactive tutorial.
             
             if self.progress_callback:
                 self.progress_callback(100)
-        
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
         print(f"Exported portable package to: {output_path}")
         return True

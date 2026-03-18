@@ -210,6 +210,7 @@ class DocumentExporter:
         pdf.set_auto_page_break(auto=True, margin=15)
         
         total_steps = len(self.tutorial.steps)
+        temp_image_paths = []
         
         # Title page
         pdf.add_page()
@@ -246,11 +247,11 @@ class DocumentExporter:
             if img is not None:
                 img = self._draw_overlay(img, step, i + 1)
                 
-                # Save temp image
+                # Keep temp images until final PDF write; Windows may lock them while assembling pages.
                 with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
                     cv2.imwrite(tmp.name, img)
                     pdf.image(tmp.name, x=10, w=190)
-                    os.unlink(tmp.name)
+                    temp_image_paths.append(tmp.name)
             
             # Action description
             pdf.ln(5)
@@ -264,6 +265,14 @@ class DocumentExporter:
                 self.progress_callback(int((i + 1) / total_steps * 100))
         
         pdf.output(output_path)
+
+        for temp_path in temp_image_paths:
+            try:
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+            except OSError:
+                pass
+
         print(f"Exported PDF to: {output_path}")
         return True
     
