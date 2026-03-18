@@ -259,12 +259,11 @@ class ZoomableVideoWidget(QWidget):
             self.is_panning = True
             self.pan_start = event.pos() - self.pan_offset
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+            return
         elif event.button() == Qt.MouseButton.LeftButton or event.button() == Qt.MouseButton.RightButton:
             # Handle left/right click for hitbox
             if self.waiting_for_click and self.current_step and self.player:
-                step = self.current_step
-                required_button = getattr(step, 'click_button', 'left')
-                
                 # Map Qt button to step button type
                 if event.button() == Qt.MouseButton.LeftButton:
                     clicked_button = 'left'
@@ -274,22 +273,11 @@ class ZoomableVideoWidget(QWidget):
                     clicked_button = 'left'
                 
                 img_pos = self.screen_to_image(event.pos())
-                
-                print(f"Click at screen: {event.pos().x()}, {event.pos().y()}")
-                print(f"Click at image: {img_pos.x()}, {img_pos.y()}")
-                print(f"Hitbox: x={step.x}, y={step.y}, w={step.width}, h={step.height}")
-                print(f"Required button: {required_button}, Clicked: {clicked_button}")
-                
-                # Check if click is within hitbox
-                in_hitbox = (step.x <= img_pos.x() <= step.x + step.width and
-                            step.y <= img_pos.y() <= step.y + step.height)
-                
-                print(f"In hitbox: {in_hitbox}")
-                
-                if in_hitbox:
-                    # Button check is optional - if left button required, accept left click
-                    if clicked_button == required_button or required_button == 'left':
-                        self.player.on_correct_click()
+                handled = self.player.handle_click(img_pos.x(), img_pos.y(), clicked_button)
+                if handled:
+                    event.accept()
+                    return
+        super().mousePressEvent(event)
     
     def mouseMoveEvent(self, event):
         if self.is_panning:
@@ -595,6 +583,11 @@ class Player(QWidget):
         self.text_input.hide()
         self.next_step()
 
+    def _center_text_input(self):
+        x = (self.width() - self.text_input.width()) // 2
+        y = (self.height() - self.text_input.height()) // 2
+        self.text_input.move(x, y)
+
     def _handle_step_key_press(self, event) -> bool:
         print(f"Player._handle_step_key_press: key={event.key()}, waiting={self.waiting_for_click}")
 
@@ -785,14 +778,11 @@ class Player(QWidget):
                     self.text_input.clear()
                     self.text_input.setReadOnly(False)
                     self.text_input.setPlaceholderText(f"Type: {step.keyboard_input}")
-                    
-                    x = (self.width() - self.text_input.width()) // 2
-                    y = (self.height() - self.text_input.height()) // 2
-                    self.text_input.move(x, y)
+                    self._center_text_input()
                     self.text_input.show()
                     self.text_input.raise_()
                     self.text_input.setFocus()
-                    print(f"Showing text input for: '{step.keyboard_input}' at ({x}, {y})")
+                    print(f"Showing text input for: '{step.keyboard_input}' at ({self.text_input.x()}, {self.text_input.y()})")
             else:
                 # Show hitbox for click steps
                 self.text_input.hide()
@@ -883,12 +873,16 @@ class Player(QWidget):
                     self.text_input.setPlaceholderText(f"Press {display_key_name(step.keyboard_input)}...")
                     self.text_input.setText("")
                     self.text_input.setReadOnly(True)
+                    self._center_text_input()
                     self.text_input.show()
+                    self.text_input.raise_()
                     self.setFocus()  # Keep focus on player for keyPressEvent to work
                 else:
                     self.text_input.setPlaceholderText("Type here...")
                     self.text_input.setText("")
+                    self._center_text_input()
                     self.text_input.show()
+                    self.text_input.raise_()
                     self.text_input.setFocus()
             else:
                 self.text_input.hide()
@@ -902,22 +896,46 @@ class Player(QWidget):
         x, y = event.pos().x(), event.pos().y()
         self.handle_click(x, y)
 
-    def handle_click(self, x, y):
+    def _is_point_in_hitbox(self, step, x: int, y: int) -> bool:
+        if step.shape == "circle":
+            rx = step.width / 2
+            ry = step.height / 2
+            if rx <= 0 or ry <= 0:
+                return False
+            cx = step.x + rx
+            cy = step.y + ry
+            dx = (x - cx) / rx
+            dy = (y - cy) / ry
+            return dx * dx + dy * dy <= 1.0
+        return step.x <= x <= step.x + step.width and step.y <= y <= step.y + step.height
+
+    def handle_click(self, x, y, button="left"):
         if self.current_step_index >= len(self.tutorial.steps):
             self.close()
-            return
+            return False
 
         step = self.tutorial.steps[self.current_step_index]
-        # print(f"Click at {x}, {y}. Target: {step.x}, {step.y}, {step.width}, {step.height}")
+        print(f"Player.handle_click: x={x}, y={y}, button={button}, waiting={self.waiting_for_click}")
         
-        # Only process click if step is click type
-        if step.action_type != "click":
-            return
+        if not self.waiting_for_click or step.action_type != "click":
+            return False
 
-        if (step.x <= x <= step.x + step.width) and (step.y <= y <= step.y + step.height):
+        required_button = getattr(step, 'click_button', 'left')
+        in_hitbox = self._is_point_in_hitbox(step, x, y)
+        button_matches = (button == required_button) or (required_button == 'left' and button == 'left')
+
+        print(
+            f"  target=({step.x},{step.y},{step.width},{step.height}), "
+            f"shape={step.shape}, required_button={required_button}, "
+            f"in_hitbox={in_hitbox}, button_matches={button_matches}"
+        )
+
+        if in_hitbox and button_matches:
             if step.sound_enabled:
                 winsound.MessageBeep(winsound.MB_OK)
             self.next_step()
+            return True
+        return False
 
     def on_correct_click(self):
         """Called when user clicks correctly on hitbox (from ZoomableVideoWidget)."""
@@ -965,6 +983,11 @@ class Player(QWidget):
 
         super().keyPressEvent(event)
             
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self.text_input.isVisible():
+            self._center_text_input()
+
     def closeEvent(self, event):
         self.stop_audio()  # Stop audio playback
         if self.cap: self.cap.release()
