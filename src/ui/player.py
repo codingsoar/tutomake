@@ -499,6 +499,12 @@ class Player(QWidget):
         # Install event filter to capture keyboard events
         self.text_input.installEventFilter(self)
         # Don't add to layout - we'll position it manually
+
+        self.prompt_label = QLabel(self)
+        self.prompt_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.prompt_label.setWordWrap(True)
+        self.prompt_label.setFixedWidth(600)
+        self.prompt_label.hide()
         
         # Video State
         self.cap = None
@@ -581,29 +587,71 @@ class Player(QWidget):
         step = self.tutorial.steps[self.current_step_index]
         if step.sound_enabled:
             winsound.MessageBeep(winsound.MB_OK)
-        self.text_input.hide()
+        self._hide_keyboard_prompts()
         self.next_step()
 
+    def _center_widget(self, widget: QWidget, y_offset: int = 0):
+        x = (self.width() - widget.width()) // 2
+        y = (self.height() - widget.height()) // 2 + y_offset
+        widget.move(x, y)
+
     def _center_text_input(self):
-        x = (self.width() - self.text_input.width()) // 2
-        y = (self.height() - self.text_input.height()) // 2
-        self.text_input.move(x, y)
+        self._center_widget(self.text_input)
+
+    def _set_box_prompt_style(self):
+        self.prompt_label.setStyleSheet("""
+            QLabel {
+                font-size: 28px;
+                padding: 16px 28px;
+                background: rgba(0, 0, 0, 0.9);
+                color: white;
+                border: 3px solid #0096FF;
+                border-radius: 15px;
+            }
+        """)
+
+    def _set_inline_prompt_style(self):
+        self.prompt_label.setStyleSheet("""
+            QLabel {
+                font-size: 22px;
+                font-weight: 600;
+                padding: 0px 0px 10px 0px;
+                background: transparent;
+                color: white;
+                border: none;
+            }
+        """)
 
     def _show_key_input_prompt(self, prompt: str):
-        self.text_input.setReadOnly(True)
-        self.text_input.setText(prompt)
-        self._center_text_input()
-        self.text_input.show()
-        self.text_input.raise_()
+        self.text_input.hide()
+        self._set_box_prompt_style()
+        self.prompt_label.setText(prompt)
+        self.prompt_label.setFixedWidth(600)
+        self.prompt_label.adjustSize()
+        self._center_widget(self.prompt_label)
+        self.prompt_label.show()
+        self.prompt_label.raise_()
 
     def _show_text_input_prompt(self, placeholder: str):
+        self._set_inline_prompt_style()
+        self.prompt_label.setText(placeholder)
+        self.prompt_label.setFixedWidth(600)
+        self.prompt_label.adjustSize()
+        self._center_widget(self.prompt_label, -58)
+        self.prompt_label.show()
+        self.prompt_label.raise_()
+
         self.text_input.clear()
         self.text_input.setReadOnly(False)
-        self.text_input.setPlaceholderText(placeholder)
-        self._center_text_input()
+        self.text_input.setPlaceholderText("")
+        self._center_widget(self.text_input, 18)
         self.text_input.show()
         self.text_input.raise_()
         self.text_input.setFocus()
+
+    def _hide_keyboard_prompts(self):
+        self.prompt_label.hide()
+        self.text_input.hide()
 
     def _handle_step_key_press(self, event) -> bool:
         print(f"Player._handle_step_key_press: key={event.key()}, waiting={self.waiting_for_click}")
@@ -650,20 +698,6 @@ class Player(QWidget):
         super().showEvent(event)
         QTimer.singleShot(100, self.video_widget.fit_to_window)
     
-    def resizeEvent(self, event):
-        """Reposition zoom controls and fit video on resize."""
-        super().resizeEvent(event)
-        
-        # Ensure zoom controls size is updated
-        self.zoom_controls.adjustSize()
-        
-        # Reposition zoom controls at bottom-left
-        self.zoom_controls.move(20, self.height() - self.zoom_controls.height() - 20)
-        self.zoom_controls.raise_()
-        
-        # Fit video to new window size
-        self.video_widget.fit_to_window()
-
     def setup_audio(self):
         """Initialize audio player if tutorial has audio."""
         if self.tutorial.audio_path and os.path.exists(self.tutorial.audio_path):
@@ -784,7 +818,7 @@ class Player(QWidget):
                 if self._is_special_keyboard_step(step):
                     # Show centered prompt box for key input, but keep focus on Player.
                     self._show_key_input_prompt(f"Press {display_key_name(step.keyboard_input)}")
-                    self.video_widget.set_overlay_state(step, True)  # Show hitbox as visual hint
+                    self.video_widget.set_overlay_state(None, False)
                     # Ensure Player receives keyboard events
                     self.setFocus()
                     self.activateWindow()
@@ -796,7 +830,7 @@ class Player(QWidget):
                     print(f"Showing text input for: '{step.keyboard_input}' at ({self.text_input.x()}, {self.text_input.y()})")
             else:
                 # Show hitbox for click steps
-                self.text_input.hide()
+                self._hide_keyboard_prompts()
                 self.video_widget.set_overlay_state(step, True)
 
     def eventFilter(self, obj, event):
@@ -826,7 +860,7 @@ class Player(QWidget):
             print(f"  MATCH! Advancing to next step.")
             if step.sound_enabled:
                 winsound.MessageBeep(winsound.MB_OK)
-            self.text_input.hide()
+            self._hide_keyboard_prompts()
             self.next_step()
         else:
             # Wrong input - flash red
@@ -882,11 +916,13 @@ class Player(QWidget):
                 # Check if it's a special key step - handle Key.xxx format from pynput
                 if self._is_special_keyboard_step(step):
                     self._show_key_input_prompt(f"Press {display_key_name(step.keyboard_input)}")
+                    self.video_widget.set_overlay_state(None, False)
                     self.setFocus()  # Keep focus on player for keyPressEvent to work
                 else:
                     self._show_text_input_prompt("Type here...")
+                    self.video_widget.set_overlay_state(None, False)
             else:
-                self.text_input.hide()
+                self._hide_keyboard_prompts()
 
     def mousePressEvent(self, event):
         if not self.waiting_for_click:
@@ -949,6 +985,7 @@ class Player(QWidget):
     def next_step(self):
         self.current_step_index += 1
         self.waiting_for_click = False
+        self._hide_keyboard_prompts()
         self.video_widget.set_overlay_state(None, False)
         
         if self.current_step_index >= len(self.tutorial.steps):
@@ -986,8 +1023,14 @@ class Player(QWidget):
             
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self.zoom_controls.adjustSize()
+        self.zoom_controls.move(20, self.height() - self.zoom_controls.height() - 20)
+        self.zoom_controls.raise_()
+        self.video_widget.fit_to_window()
+        if self.prompt_label.isVisible():
+            self._center_widget(self.prompt_label, -58 if self.text_input.isVisible() else 0)
         if self.text_input.isVisible():
-            self._center_text_input()
+            self._center_widget(self.text_input, 18)
 
     def closeEvent(self, event):
         self.stop_audio()  # Stop audio playback

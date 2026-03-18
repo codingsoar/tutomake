@@ -486,6 +486,7 @@ class WebExporter:
             keyboardModal.classList.add('active');
             modalInput.value = '';
             modalInput.className = 'modal-input';
+            document.onkeydown = null;
             
             let expectedInput = step.keyboard_input.toLowerCase().trim();
             if (expectedInput.startsWith('key.')) expectedInput = expectedInput.substring(4);
@@ -520,7 +521,7 @@ class WebExporter:
                 modalInput.focus();
             }}
             
-            modalInput.onkeydown = function(e) {{
+            document.onkeydown = function(e) {{
                 let keyName = e.key.toLowerCase();
                 
                 if (e.key === 'Delete') keyName = 'delete';
@@ -556,6 +557,7 @@ class WebExporter:
                     e.preventDefault();
                     if (modalInput.value === step.keyboard_input) {{
                         modalInput.className = 'modal-input success';
+                        document.onkeydown = null;
                         setTimeout(() => {{
                             hideKeyboardModal();
                             nextStep();
@@ -569,6 +571,7 @@ class WebExporter:
         }}
         
         function hideKeyboardModal() {{
+            document.onkeydown = null;
             keyboardModal.classList.remove('active');
         }}
         
@@ -1162,6 +1165,7 @@ class WebExporter:
         
         function showKeyboardModal(step) {{
             keyboardModal.classList.add('active');
+            document.onkeydown = null;
             
             let expectedInput = step.keyboard_input.toLowerCase().trim();
             if (expectedInput.startsWith('key.')) expectedInput = expectedInput.substring(4);
@@ -1241,6 +1245,7 @@ class WebExporter:
         }}
         
         function hideKeyboardModal() {{
+            document.onkeydown = null;
             keyboardModal.classList.remove('active');
         }}
         
