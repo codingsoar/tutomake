@@ -25,19 +25,23 @@ class SpecialKeyLineEdit(QLineEdit):
     
     def keyPressEvent(self, event):
         print(f"SpecialKeyLineEdit.keyPressEvent: key={event.key()}")
-        
-        # Forward special keys to parent Player
+
+        # Only forward special keys when the current step expects a special key.
         if event.key() in self.SPECIAL_KEYS:
-            print(f"  Special key detected, forwarding to Player")
-            # Find Player parent by class name
             parent = self.parent()
             while parent:
                 if parent.__class__.__name__ == 'Player':
-                    print(f"  Found Player, calling keyPressEvent")
-                    parent.keyPressEvent(event)
-                    return
+                    current_step = (
+                        parent.tutorial.steps[parent.current_step_index]
+                        if parent.current_step_index < len(parent.tutorial.steps)
+                        else None
+                    )
+                    if current_step and parent._is_special_keyboard_step(current_step):
+                        print("  Special key step detected, forwarding to Player")
+                        parent.keyPressEvent(event)
+                        return
+                    break
                 parent = parent.parent()
-            print(f"  Player not found!")
         super().keyPressEvent(event)
 
 
@@ -454,6 +458,20 @@ class Player(QWidget):
     from PySide6.QtCore import Signal
     closed = Signal()
 
+    TEXT_INPUT_STYLE = """
+        QLineEdit {
+            font-size: 32px;
+            padding: 20px 40px;
+            background: rgba(0, 0, 0, 0.9);
+            color: white;
+            border: 3px solid #0096FF;
+            border-radius: 15px;
+        }
+        QLineEdit::placeholder {
+            color: rgba(255, 255, 255, 0.45);
+        }
+    """
+
     def __init__(self, tutorial: Tutorial, video_mode: bool = True):
         super().__init__()
         self.tutorial = tutorial
@@ -479,18 +497,8 @@ class Player(QWidget):
         
         # Text input for keyboard steps (overlay, not in layout)
         self.text_input = SpecialKeyLineEdit(self)  # Custom class that forwards special keys
-        self.text_input.setPlaceholderText("Type the required text and press Enter...")
         self.text_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.text_input.setStyleSheet("""
-            QLineEdit {
-                font-size: 32px;
-                padding: 20px 40px;
-                background: rgba(0, 0, 0, 0.9);
-                color: white;
-                border: 3px solid #0096FF;
-                border-radius: 15px;
-            }
-        """)
+        self.text_input.setStyleSheet(self.TEXT_INPUT_STYLE)
         self.text_input.setFixedWidth(600)
         self.text_input.setFixedHeight(80)
         self.text_input.returnPressed.connect(self.on_text_submitted)
@@ -499,6 +507,19 @@ class Player(QWidget):
         # Install event filter to capture keyboard events
         self.text_input.installEventFilter(self)
         # Don't add to layout - we'll position it manually
+
+        self.text_input_hint = QLabel(self)
+        self.text_input_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.text_input_hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.text_input_hint.setStyleSheet("""
+            QLabel {
+                font-size: 32px;
+                color: rgba(255, 255, 255, 0.45);
+                background: transparent;
+                padding: 20px 40px;
+            }
+        """)
+        self.text_input_hint.hide()
 
         self.prompt_label = QLabel(self)
         self.prompt_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -597,6 +618,10 @@ class Player(QWidget):
 
     def _center_text_input(self):
         self._center_widget(self.text_input)
+        self.text_input_hint.setGeometry(self.text_input.geometry())
+
+    def _update_text_input_hint_visibility(self):
+        self.text_input_hint.setVisible(self.text_input.isVisible() and not self.text_input.text())
 
     def _set_box_prompt_style(self):
         self.prompt_label.setStyleSheet("""
@@ -633,25 +658,24 @@ class Player(QWidget):
         self.prompt_label.raise_()
 
     def _show_text_input_prompt(self, placeholder: str):
-        self._set_inline_prompt_style()
-        self.prompt_label.setText(placeholder)
-        self.prompt_label.setFixedWidth(600)
-        self.prompt_label.adjustSize()
-        self._center_widget(self.prompt_label, -58)
-        self.prompt_label.show()
-        self.prompt_label.raise_()
+        self.prompt_label.hide()
 
         self.text_input.clear()
         self.text_input.setReadOnly(False)
-        self.text_input.setPlaceholderText("")
+        self.text_input_hint.setText(placeholder)
         self._center_widget(self.text_input, 18)
+        self.text_input_hint.setGeometry(self.text_input.geometry())
         self.text_input.show()
         self.text_input.raise_()
+        self.text_input_hint.show()
+        self.text_input_hint.raise_()
+        self._update_text_input_hint_visibility()
         self.text_input.setFocus()
 
     def _hide_keyboard_prompts(self):
         self.prompt_label.hide()
         self.text_input.hide()
+        self.text_input_hint.hide()
 
     def _handle_step_key_press(self, event) -> bool:
         print(f"Player._handle_step_key_press: key={event.key()}, waiting={self.waiting_for_click}")
@@ -826,7 +850,7 @@ class Player(QWidget):
                 else:
                     # Normal text input
                     self.video_widget.set_overlay_state(None, False)
-                    self._show_text_input_prompt(f"Type: {step.keyboard_input}")
+                    self._show_text_input_prompt(step.keyboard_input)
                     print(f"Showing text input for: '{step.keyboard_input}' at ({self.text_input.x()}, {self.text_input.y()})")
             else:
                 # Show hitbox for click steps
@@ -877,19 +901,12 @@ class Player(QWidget):
             QTimer.singleShot(500, self.reset_text_input_style)
     
     def reset_text_input_style(self):
-        self.text_input.setStyleSheet("""
-            QLineEdit {
-                font-size: 24px;
-                padding: 15px;
-                background: rgba(0, 0, 0, 0.8);
-                color: white;
-                border: 2px solid #0096FF;
-                border-radius: 10px;
-            }
-        """)
+        self.text_input.setStyleSheet(self.TEXT_INPUT_STYLE)
 
     def on_text_changed(self, text):
         """Check if user typed space to submit (only for regular text steps)."""
+        self._update_text_input_hint_visibility()
+
         # We don't want space to submit if the expected input actually contains space
         if self.current_step_index < len(self.tutorial.steps):
             step = self.tutorial.steps[self.current_step_index]
@@ -908,21 +925,6 @@ class Player(QWidget):
             step = self.tutorial.steps[self.current_step_index]
             pixmap = QPixmap(step.image_path)
             self.video_widget.setPixmap(pixmap)
-            self.waiting_for_click = True
-            self.video_widget.set_overlay_state(step, True)
-            
-            # Show/Hide text input based on step type
-            if step.action_type == "keyboard":
-                # Check if it's a special key step - handle Key.xxx format from pynput
-                if self._is_special_keyboard_step(step):
-                    self._show_key_input_prompt(f"Press {display_key_name(step.keyboard_input)}")
-                    self.video_widget.set_overlay_state(None, False)
-                    self.setFocus()  # Keep focus on player for keyPressEvent to work
-                else:
-                    self._show_text_input_prompt("Type here...")
-                    self.video_widget.set_overlay_state(None, False)
-            else:
-                self._hide_keyboard_prompts()
 
     def mousePressEvent(self, event):
         if not self.waiting_for_click:
@@ -1031,6 +1033,8 @@ class Player(QWidget):
             self._center_widget(self.prompt_label, -58 if self.text_input.isVisible() else 0)
         if self.text_input.isVisible():
             self._center_widget(self.text_input, 18)
+            self.text_input_hint.setGeometry(self.text_input.geometry())
+            self._update_text_input_hint_visibility()
 
     def closeEvent(self, event):
         self.stop_audio()  # Stop audio playback

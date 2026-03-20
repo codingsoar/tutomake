@@ -244,6 +244,22 @@ class WebExporter:
             outline: none;
             transition: border-color 0.3s;
         }}
+        .modal-input-wrap {{
+            position: relative;
+            width: 300px;
+            margin: 0 auto;
+        }}
+        .modal-input-ghost {{
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: rgba(255, 255, 255, 0.45);
+            pointer-events: none;
+            font-size: 1.2em;
+            padding: 15px 20px;
+        }}
         .modal-input:focus {{
             border-color: #00d2ff;
         }}
@@ -368,7 +384,10 @@ class WebExporter:
         <div class="modal-content">
             <div class="modal-title">⌨️ Type the required text</div>
             <div class="modal-hint" id="modalHint">Enter the text shown below</div>
-            <input type="text" class="modal-input" id="modalInput" autocomplete="off">
+            <div class="modal-input-wrap" id="modalInputWrap">
+                <input type="text" class="modal-input" id="modalInput" autocomplete="off">
+                <div class="modal-input-ghost" id="modalInputGhost"></div>
+            </div>
         </div>
     </div>
     
@@ -410,6 +429,8 @@ class WebExporter:
         const keyboardModal = document.getElementById('keyboardModal');
         const modalInput = document.getElementById('modalInput');
         const modalHint = document.getElementById('modalHint');
+        const modalInputGhost = document.getElementById('modalInputGhost');
+        const modalInputWrap = document.getElementById('modalInputWrap');
         
         // Initialize
         function init() {{
@@ -515,10 +536,16 @@ class WebExporter:
             
             if (isSpecial) {{
                 modalHint.textContent = customInstruction || `Press: ${{step.keyboard_input}}`;
+                modalHint.style.display = 'block';
                 modalInput.style.display = 'none';
+                modalInputWrap.style.display = 'none';
+                modalInputGhost.textContent = '';
             }} else {{
-                modalHint.textContent = customInstruction || `Type: "${{step.keyboard_input}}"`;
+                modalHint.textContent = customInstruction || '';
+                modalHint.style.display = customInstruction ? 'block' : 'none';
                 modalInput.style.display = 'block';
+                modalInputWrap.style.display = 'block';
+                modalInputGhost.textContent = step.keyboard_input;
                 modalInput.focus();
             }}
             
@@ -575,6 +602,10 @@ class WebExporter:
             document.onkeydown = null;
             keyboardModal.classList.remove('active');
         }}
+
+        modalInput.addEventListener('input', function() {{
+            modalInputGhost.style.display = modalInput.value ? 'none' : 'flex';
+        }});
         
         function nextStep() {{
             renderStep(currentStep + 1);
@@ -976,6 +1007,22 @@ class WebExporter:
             color: white;
             text-align: center;
         }}
+        .modal-input-wrap {{
+            position: relative;
+            width: 300px;
+            margin: 0 auto;
+        }}
+        .modal-input-ghost {{
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: rgba(255, 255, 255, 0.45);
+            pointer-events: none;
+            font-size: 1.2em;
+            padding: 15px;
+        }}
         .modal-input:focus {{ border-color: #00d2ff; outline: none; }}
         .modal-input.success {{ border-color: #4CAF50; }}
         .modal-input.error {{ border-color: #ff4444; animation: shake 0.3s; }}
@@ -1048,7 +1095,10 @@ class WebExporter:
         <div class="modal-content">
             <div class="modal-title">⌨️ Type the required text</div>
             <div class="modal-hint" id="modalHint">Enter the text</div>
-            <input type="text" class="modal-input" id="modalInput" autocomplete="off">
+            <div class="modal-input-wrap" id="modalInputWrap">
+                <input type="text" class="modal-input" id="modalInput" autocomplete="off">
+                <div class="modal-input-ghost" id="modalInputGhost"></div>
+            </div>
         </div>
     </div>
     
@@ -1076,6 +1126,8 @@ class WebExporter:
         const keyboardModal = document.getElementById('keyboardModal');
         const modalInput = document.getElementById('modalInput');
         const modalHint = document.getElementById('modalHint');
+        const modalInputGhost = document.getElementById('modalInputGhost');
+        const modalInputWrap = document.getElementById('modalInputWrap');
         const audio = document.getElementById('audio');
         const audioOffset = {self.tutorial.audio_offset};  // Audio sync offset in seconds
         
@@ -1195,10 +1247,16 @@ class WebExporter:
             
             if (isSpecial) {{
                 modalHint.textContent = customInstruction || `Press: ${{step.keyboard_input}}`;
+                modalHint.style.display = 'block';
                 modalInput.style.display = 'none';
+                modalInputWrap.style.display = 'none';
+                modalInputGhost.textContent = '';
             }} else {{
-                modalHint.textContent = customInstruction || `Type: "${{step.keyboard_input}}"`;
+                modalHint.textContent = customInstruction || '';
+                modalHint.style.display = customInstruction ? 'block' : 'none';
                 modalInput.style.display = 'block';
+                modalInputWrap.style.display = 'block';
+                modalInputGhost.textContent = step.keyboard_input;
                 modalInput.focus();
             }}
             
@@ -1250,6 +1308,10 @@ class WebExporter:
             document.onkeydown = null;
             keyboardModal.classList.remove('active');
         }}
+
+        modalInput.addEventListener('input', function() {{
+            modalInputGhost.style.display = modalInput.value ? 'none' : 'flex';
+        }});
         
         function showCompletion() {{
             document.getElementById('completionScreen').classList.remove('hidden');
