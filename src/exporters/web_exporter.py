@@ -542,12 +542,14 @@ class WebExporter:
                 modalInput.style.display = 'none';
                 modalInputWrap.style.display = 'none';
                 modalInputGhost.textContent = '';
+                modalInputGhost.style.display = 'none';
             }} else {{
                 modalHint.textContent = customInstruction || '';
                 modalHint.style.display = customInstruction ? 'block' : 'none';
                 modalInput.style.display = 'block';
                 modalInputWrap.style.display = 'block';
                 modalInputGhost.textContent = step.keyboard_input;
+                modalInputGhost.style.display = 'flex';
                 modalInput.focus();
             }}
             
@@ -1256,12 +1258,14 @@ class WebExporter:
                 modalInput.style.display = 'none';
                 modalInputWrap.style.display = 'none';
                 modalInputGhost.textContent = '';
+                modalInputGhost.style.display = 'none';
             }} else {{
                 modalHint.textContent = customInstruction || '';
                 modalHint.style.display = customInstruction ? 'block' : 'none';
                 modalInput.style.display = 'block';
                 modalInputWrap.style.display = 'block';
                 modalInputGhost.textContent = step.keyboard_input;
+                modalInputGhost.style.display = 'flex';
                 modalInput.focus();
             }}
             
