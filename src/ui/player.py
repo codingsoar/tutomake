@@ -4,6 +4,7 @@ from PySide6.QtCore import Qt, QRect, QTimer, QPoint, QUrl
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 import winsound
 import os
+import re
 import cv2
 import numpy as np
 from ..key_utils import display_key_name, is_special_key_name, normalize_key_name
@@ -22,6 +23,10 @@ class SpecialKeyLineEdit(QLineEdit):
         Qt.Key.Key_F5, Qt.Key.Key_F6, Qt.Key.Key_F7, Qt.Key.Key_F8,
         Qt.Key.Key_F9, Qt.Key.Key_F10, Qt.Key.Key_F11, Qt.Key.Key_F12,
     }
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.persistent_hint = ""
     
     def keyPressEvent(self, event):
         print(f"SpecialKeyLineEdit.keyPressEvent: key={event.key()}")
@@ -43,6 +48,24 @@ class SpecialKeyLineEdit(QLineEdit):
                     break
                 parent = parent.parent()
         super().keyPressEvent(event)
+
+    def setPersistentHint(self, text: str):
+        self.persistent_hint = text or ""
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self.text() or not self.persistent_hint:
+            return
+
+        painter = QPainter(self)
+        painter.setPen(QColor(255, 255, 255, 115))
+        text_rect = self.rect().adjusted(20, 0, -20, 0)
+        painter.drawText(
+            text_rect,
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter,
+            self.persistent_hint,
+        )
 
 
 
@@ -502,24 +525,11 @@ class Player(QWidget):
         self.text_input.setFixedWidth(600)
         self.text_input.setFixedHeight(80)
         self.text_input.returnPressed.connect(self.on_text_submitted)
-        self.text_input.textChanged.connect(self.on_text_changed)  # Check for space
+        self.text_input.textChanged.connect(self.on_text_changed)
         self.text_input.hide()  # Hidden until keyboard step
         # Install event filter to capture keyboard events
         self.text_input.installEventFilter(self)
         # Don't add to layout - we'll position it manually
-
-        self.text_input_hint = QLabel(self)
-        self.text_input_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.text_input_hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self.text_input_hint.setStyleSheet("""
-            QLabel {
-                font-size: 32px;
-                color: rgba(255, 255, 255, 0.45);
-                background: transparent;
-                padding: 20px 40px;
-            }
-        """)
-        self.text_input_hint.hide()
 
         self.prompt_label = QLabel(self)
         self.prompt_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -595,6 +605,12 @@ class Player(QWidget):
     def _expected_keyboard_input(self, step) -> str:
         return normalize_key_name(step.keyboard_input or "")
 
+    def _normalize_text_input(self, value: str) -> str:
+        normalized = (value or "").strip().casefold()
+        normalized = re.sub(r"\s*,\s*", ",", normalized)
+        normalized = re.sub(r"\s+", " ", normalized)
+        return normalized
+
     def _is_special_keyboard_step(self, step) -> bool:
         if step.action_type != "keyboard":
             return False
@@ -618,10 +634,6 @@ class Player(QWidget):
 
     def _center_text_input(self):
         self._center_widget(self.text_input)
-        self.text_input_hint.setGeometry(self.text_input.geometry())
-
-    def _update_text_input_hint_visibility(self):
-        self.text_input_hint.setVisible(self.text_input.isVisible() and not self.text_input.text())
 
     def _set_box_prompt_style(self):
         self.prompt_label.setStyleSheet("""
@@ -662,20 +674,17 @@ class Player(QWidget):
 
         self.text_input.clear()
         self.text_input.setReadOnly(False)
-        self.text_input_hint.setText(placeholder)
+        self.text_input.setPersistentHint(placeholder)
         self._center_widget(self.text_input, 18)
-        self.text_input_hint.setGeometry(self.text_input.geometry())
         self.text_input.show()
         self.text_input.raise_()
-        self.text_input_hint.show()
-        self.text_input_hint.raise_()
-        self._update_text_input_hint_visibility()
+        self.text_input.update()
         self.text_input.setFocus()
 
     def _hide_keyboard_prompts(self):
         self.prompt_label.hide()
         self.text_input.hide()
-        self.text_input_hint.hide()
+        self.text_input.setPersistentHint("")
 
     def _handle_step_key_press(self, event) -> bool:
         print(f"Player._handle_step_key_press: key={event.key()}, waiting={self.waiting_for_click}")
@@ -876,11 +885,15 @@ class Player(QWidget):
         step = self.tutorial.steps[self.current_step_index]
         user_input = self.text_input.text().strip()
         expected = (step.keyboard_input or "").strip()
+        normalized_user_input = self._normalize_text_input(user_input)
+        normalized_expected = self._normalize_text_input(expected)
         
-        print(f"on_text_submitted: user_input='{user_input}', expected='{expected}'")
+        print(
+            f"on_text_submitted: user_input='{user_input}', expected='{expected}', "
+            f"normalized_user_input='{normalized_user_input}', normalized_expected='{normalized_expected}'"
+        )
         
-        # Check if input matches (case-insensitive)
-        if user_input.lower() == expected.lower():
+        if normalized_user_input == normalized_expected:
             print(f"  MATCH! Advancing to next step.")
             if step.sound_enabled:
                 winsound.MessageBeep(winsound.MB_OK)
@@ -905,18 +918,20 @@ class Player(QWidget):
 
     def on_text_changed(self, text):
         """Check if user typed space to submit (only for regular text steps)."""
-        self._update_text_input_hint_visibility()
+        self.text_input.update()
 
-        # We don't want space to submit if the expected input actually contains space
-        if self.current_step_index < len(self.tutorial.steps):
-            step = self.tutorial.steps[self.current_step_index]
-            if step.action_type == "keyboard" and step.keyboard_input:
-                 # If expecting "Space", we handle it in keyPressEvent
-                 pass
+        if self.current_step_index >= len(self.tutorial.steps):
+            return
 
-        if text.endswith(' '):
-            # Remove the space and submit if it's a normal text step
-            # For now, keep existing behavior but maybe refine later
+        step = self.tutorial.steps[self.current_step_index]
+        expected = (step.keyboard_input or "").strip()
+
+        # Preserve spaces inside normal text such as coordinates like "420, 297".
+        if (
+            text.endswith(' ')
+            and ' ' not in expected
+            and self._normalize_text_input(text.rstrip()) == self._normalize_text_input(expected)
+        ):
             self.text_input.setText(text.rstrip())
             self.on_text_submitted()
 
@@ -1033,8 +1048,7 @@ class Player(QWidget):
             self._center_widget(self.prompt_label, -58 if self.text_input.isVisible() else 0)
         if self.text_input.isVisible():
             self._center_widget(self.text_input, 18)
-            self.text_input_hint.setGeometry(self.text_input.geometry())
-            self._update_text_input_hint_visibility()
+            self.text_input.update()
 
     def closeEvent(self, event):
         self.stop_audio()  # Stop audio playback
