@@ -6,6 +6,7 @@ import mss
 import mss.tools
 from datetime import datetime
 import os
+import wave
 import cv2
 import numpy as np
 from .key_utils import display_key_name, normalize_key_name
@@ -14,11 +15,10 @@ from .model import Step, Tutorial
 # Audio recording support
 try:
     import sounddevice as sd
-    from scipy.io import wavfile
     AUDIO_AVAILABLE = True
 except ImportError:
     AUDIO_AVAILABLE = False
-    print("Warning: sounddevice/scipy not installed. Audio recording disabled.")
+    print("Warning: sounddevice not installed. Audio recording disabled.")
 
 class Recorder:
     def __init__(self, tutorial: Tutorial, storage_dir: str, video_mode: bool = False, record_audio: bool = True):
@@ -284,9 +284,21 @@ class Recorder:
         try:
             # Combine all audio chunks
             audio_array = np.concatenate(self.audio_data, axis=0)
-            
-            # Save as WAV
-            wavfile.write(self.audio_path, self.audio_sample_rate, audio_array)
+
+            # Convert float audio samples from sounddevice to 16-bit PCM WAV.
+            if np.issubdtype(audio_array.dtype, np.floating):
+                audio_array = np.clip(audio_array, -1.0, 1.0)
+                audio_array = (audio_array * 32767).astype(np.int16)
+            elif audio_array.dtype != np.int16:
+                audio_array = audio_array.astype(np.int16)
+
+            # Save as WAV using the standard library to avoid scipy packaging overhead.
+            with wave.open(self.audio_path, 'wb') as wav_file:
+                wav_file.setnchannels(self.audio_channels)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(self.audio_sample_rate)
+                wav_file.writeframes(audio_array.tobytes())
+
             print(f"Audio saved to: {self.audio_path}")
             
             # Merge video and audio using ffmpeg
