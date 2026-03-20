@@ -205,12 +205,11 @@ class WebExporter:
             left: 0;
             width: 100%;
             height: 100%;
-            background: rgba(0,0,0,0.8);
+            background: transparent;
             display: none;
             justify-content: center;
             align-items: center;
             z-index: 500;
-            backdrop-filter: blur(5px);
         }}
         .modal-overlay.active {{
             display: flex;
@@ -243,6 +242,8 @@ class WebExporter:
             text-align: center;
             outline: none;
             transition: border-color 0.3s;
+            position: relative;
+            z-index: 2;
         }}
         .modal-input-wrap {{
             position: relative;
@@ -259,6 +260,7 @@ class WebExporter:
             pointer-events: none;
             font-size: 1.2em;
             padding: 15px 20px;
+            z-index: 3;
         }}
         .modal-input:focus {{
             border-color: #00d2ff;
@@ -982,7 +984,7 @@ class WebExporter:
             left: 0;
             width: 100%;
             height: 100%;
-            background: rgba(0,0,0,0.8);
+            background: transparent;
             display: none;
             justify-content: center;
             align-items: center;
@@ -1006,6 +1008,8 @@ class WebExporter:
             background: #1a1a2e;
             color: white;
             text-align: center;
+            position: relative;
+            z-index: 2;
         }}
         .modal-input-wrap {{
             position: relative;
@@ -1022,6 +1026,7 @@ class WebExporter:
             pointer-events: none;
             font-size: 1.2em;
             padding: 15px;
+            z-index: 3;
         }}
         .modal-input:focus {{ border-color: #00d2ff; outline: none; }}
         .modal-input.success {{ border-color: #4CAF50; }}
