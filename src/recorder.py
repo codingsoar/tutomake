@@ -41,6 +41,8 @@ class Recorder:
         self.audio_path = None
         self.monitor_left = 0
         self.monitor_top = 0
+        self.native_width = 0
+        self.native_height = 0
         
         # Audio settings
         self.audio_sample_rate = 44100
@@ -367,14 +369,32 @@ class Recorder:
         filepath = os.path.join(self.storage_dir, filename)
 
         with mss.mss() as sct:
-            monitor_idx = 1
-            for i, m in enumerate(sct.monitors[1:], 1):
-                if (m["left"] <= x < m["left"] + m["width"]) and \
-                   (m["top"] <= y < m["top"] + m["height"]):
-                    monitor_idx = i
-                    break
-            
-            monitor = sct.monitors[monitor_idx]
+            if self.video_mode:
+                monitor = {
+                    "left": self.monitor_left,
+                    "top": self.monitor_top,
+                    "width": self.native_width,
+                    "height": self.native_height,
+                }
+
+                in_recorded_monitor = (
+                    monitor["left"] <= x < monitor["left"] + monitor["width"]
+                    and monitor["top"] <= y < monitor["top"] + monitor["height"]
+                )
+                if not in_recorded_monitor:
+                    print(
+                        f"Ignoring {button_name} click at {x}, {y}: "
+                        "outside recorded monitor bounds"
+                    )
+                    return
+            else:
+                monitor_idx = 1
+                for i, m in enumerate(sct.monitors[1:], 1):
+                    if (m["left"] <= x < m["left"] + m["width"]) and \
+                       (m["top"] <= y < m["top"] + m["height"]):
+                        monitor_idx = i
+                        break
+                monitor = sct.monitors[monitor_idx]
             
             sct_img = sct.grab(monitor)
             mss.tools.to_png(sct_img.rgb, sct_img.size, output=filepath)
@@ -412,9 +432,22 @@ class Recorder:
             return
             
         try:
+            keypad_char = None
+            vk = getattr(key, 'vk', None)
+            if vk is not None:
+                keypad_digit_map = {96 + i: str(i) for i in range(10)}
+                keypad_symbol_map = {
+                    106: '*',
+                    107: '+',
+                    109: '-',
+                    110: '.',
+                    111: '/',
+                }
+                keypad_char = keypad_digit_map.get(vk) or keypad_symbol_map.get(vk)
+
             # Get the character
-            if hasattr(key, 'char') and key.char:
-                char = key.char
+            if (hasattr(key, 'char') and key.char) or keypad_char:
+                char = key.char if hasattr(key, 'char') and key.char else keypad_char
                 
                 # Start buffer timing if this is the first key
                 if not self.key_buffer:

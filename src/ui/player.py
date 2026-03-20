@@ -832,10 +832,8 @@ class Player(QWidget):
             return
 
         step = self.tutorial.steps[self.current_step_index]
-        delay_frames = int(self.fps * 0.2)
-        
         target_frame = int(step.timestamp * self.fps)
-        pause_frame = max(target_frame + delay_frames, 5)  # At least play 5 frames
+        pause_frame = max(target_frame, 1)
         
         # Only print every 24 frames to avoid spam
         if self.frame_counter % 24 == 0:
