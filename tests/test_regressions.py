@@ -163,6 +163,34 @@ class RegressionTests(unittest.TestCase):
         self.assertIn(completion_subtitle, html)
         self.assertIn(restart_button, html)
 
+    def test_web_export_shows_default_prompt_for_special_key_steps(self):
+        tmpdir = self.make_tempdir()
+        self.addCleanup(self.cleanup_tempdir, tmpdir)
+        image_path = tmpdir / "source.png"
+        self._make_image(image_path)
+
+        tutorial = Tutorial(
+            title="Special Key Prompt",
+            steps=[
+                Step(
+                    description="Press ESC",
+                    instruction="",
+                    action_type="keyboard",
+                    keyboard_input="esc",
+                    keyboard_mode="key",
+                    image_path=str(image_path),
+                )
+            ],
+        )
+
+        html_path = tmpdir / "tutorial.html"
+        result = WebExporter(tutorial).export_html(str(html_path))
+
+        self.assertTrue(result)
+        html = html_path.read_text(encoding="utf-8")
+        self.assertIn("const defaultSpecialInstruction = isSpecial ? `${expectedInput.toUpperCase()}", html)
+        self.assertIn("const modalMessage = customInstruction || defaultSpecialInstruction;", html)
+
     def test_editor_undo_restores_audio_state(self):
         tmpdir = self.make_tempdir()
         self.addCleanup(self.cleanup_tempdir, tmpdir)

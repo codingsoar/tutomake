@@ -511,12 +511,6 @@ class WebExporter:
             modalInput.value = '';
             modalInput.className = 'modal-input';
             document.onkeydown = null;
-            const customInstruction = (step.instruction || '').trim();
-            modalTitle.textContent = customInstruction;
-            modalTitle.style.display = customInstruction ? 'block' : 'none';
-            modalHint.textContent = '';
-            modalHint.style.display = 'none';
-            
             let expectedInput = step.keyboard_input.toLowerCase().trim();
             if (expectedInput.startsWith('key.')) expectedInput = expectedInput.substring(4);
             
@@ -540,6 +534,13 @@ class WebExporter:
             const isFkey = expectedInput.startsWith('f') && expectedInput.length > 1 && !isNaN(expectedInput.substring(1));
             const inferredSpecial = specialKeys.includes(expectedInput) || isFkey;
             const isSpecial = (step.keyboard_mode || '') === 'key' || inferredSpecial;
+            const customInstruction = (step.instruction || '').trim();
+            const defaultSpecialInstruction = isSpecial ? `${{expectedInput.toUpperCase()}} 키를 누르세요` : '';
+            const modalMessage = customInstruction || defaultSpecialInstruction;
+            modalTitle.textContent = modalMessage;
+            modalTitle.style.display = modalMessage ? 'block' : 'none';
+            modalHint.textContent = '';
+            modalHint.style.display = 'none';
             
             if (isSpecial) {{
                 modalInput.style.display = 'none';
@@ -1228,12 +1229,6 @@ class WebExporter:
         function showKeyboardModal(step) {{
             keyboardModal.classList.add('active');
             document.onkeydown = null;
-            const customInstruction = (step.instruction || '').trim();
-            modalTitle.textContent = customInstruction;
-            modalTitle.style.display = customInstruction ? 'block' : 'none';
-            modalHint.textContent = '';
-            modalHint.style.display = 'none';
-            
             let expectedInput = step.keyboard_input.toLowerCase().trim();
             if (expectedInput.startsWith('key.')) expectedInput = expectedInput.substring(4);
             
@@ -1257,6 +1252,13 @@ class WebExporter:
             const isFkey = expectedInput.startsWith('f') && expectedInput.length >= 2 && !isNaN(expectedInput.substring(1));
             const inferredSpecial = specialKeys.includes(expectedInput) || isFkey;
             const isSpecial = (step.keyboard_mode || '') === 'key' || inferredSpecial;
+            const customInstruction = (step.instruction || '').trim();
+            const defaultSpecialInstruction = isSpecial ? `${{expectedInput.toUpperCase()}} 키를 누르세요` : '';
+            const modalMessage = customInstruction || defaultSpecialInstruction;
+            modalTitle.textContent = modalMessage;
+            modalTitle.style.display = modalMessage ? 'block' : 'none';
+            modalHint.textContent = '';
+            modalHint.style.display = 'none';
             
             if (isSpecial) {{
                 modalInput.style.display = 'none';
