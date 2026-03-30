@@ -1671,6 +1671,36 @@ class Editor(QMainWindow):
         offset_layout.addWidget(self.audio_offset_slider)
         offset_layout.addWidget(self.audio_offset_label)
         props_layout.addRow("Sync Offset:", offset_layout)
+
+        # ==================== Export Text Section ====================
+        props_layout.addRow(QLabel(""))  # Spacer
+        export_text_label = QLabel("Web Export Text")
+        export_text_label.setStyleSheet("font-weight: bold; color: #888;")
+        props_layout.addRow(export_text_label)
+
+        self.tutorial_title_input = QLineEdit()
+        self.tutorial_title_input.editingFinished.connect(self.update_export_text_fields)
+        props_layout.addRow("Tutorial Title:", self.tutorial_title_input)
+
+        self.start_subtitle_input = QLineEdit()
+        self.start_subtitle_input.editingFinished.connect(self.update_export_text_fields)
+        props_layout.addRow("Start Subtitle:", self.start_subtitle_input)
+
+        self.start_button_input = QLineEdit()
+        self.start_button_input.editingFinished.connect(self.update_export_text_fields)
+        props_layout.addRow("Start Button:", self.start_button_input)
+
+        self.completion_title_input = QLineEdit()
+        self.completion_title_input.editingFinished.connect(self.update_export_text_fields)
+        props_layout.addRow("Completion Title:", self.completion_title_input)
+
+        self.completion_subtitle_input = QLineEdit()
+        self.completion_subtitle_input.editingFinished.connect(self.update_export_text_fields)
+        props_layout.addRow("Completion Subtitle:", self.completion_subtitle_input)
+
+        self.restart_button_input = QLineEdit()
+        self.restart_button_input.editingFinished.connect(self.update_export_text_fields)
+        props_layout.addRow("Restart Button:", self.restart_button_input)
         
         self.props_dock.setWidget(props_widget)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.props_dock)
@@ -1759,6 +1789,37 @@ class Editor(QMainWindow):
         self.audio_offset_slider.setValue(int(round(self.tutorial.audio_offset * 10)))
         self.audio_offset_slider.blockSignals(False)
         self.audio_offset_label.setText(f"{self.tutorial.audio_offset:+.1f}s")
+
+        self.tutorial_title_input.blockSignals(True)
+        self.start_subtitle_input.blockSignals(True)
+        self.start_button_input.blockSignals(True)
+        self.completion_title_input.blockSignals(True)
+        self.completion_subtitle_input.blockSignals(True)
+        self.restart_button_input.blockSignals(True)
+
+        self.tutorial_title_input.setText(self.tutorial.title)
+        self.start_subtitle_input.setText(self.tutorial.start_subtitle)
+        self.start_button_input.setText(self.tutorial.start_button_text)
+        self.completion_title_input.setText(self.tutorial.completion_title)
+        self.completion_subtitle_input.setText(self.tutorial.completion_subtitle)
+        self.restart_button_input.setText(self.tutorial.restart_button_text)
+
+        self.tutorial_title_input.blockSignals(False)
+        self.start_subtitle_input.blockSignals(False)
+        self.start_button_input.blockSignals(False)
+        self.completion_title_input.blockSignals(False)
+        self.completion_subtitle_input.blockSignals(False)
+        self.restart_button_input.blockSignals(False)
+
+    def update_export_text_fields(self):
+        """Update tutorial-level text used by web exports."""
+        self.tutorial.title = self.tutorial_title_input.text() or "New Tutorial"
+        self.tutorial.start_subtitle = self.start_subtitle_input.text()
+        self.tutorial.start_button_text = self.start_button_input.text() or "시작하기"
+        self.tutorial.completion_title = self.completion_title_input.text() or "튜토리얼 완료"
+        self.tutorial.completion_subtitle = self.completion_subtitle_input.text()
+        self.tutorial.restart_button_text = self.restart_button_input.text() or "다시 시작"
+        self.save_state()
 
     def refresh(self):
         previous_row = self.step_list.currentRow()
@@ -2357,6 +2418,12 @@ class Editor(QMainWindow):
         # Create a deep copy of steps
         state = {
             'steps': [step.model_dump() for step in self.tutorial.steps],
+            'title': self.tutorial.title,
+            'start_subtitle': self.tutorial.start_subtitle,
+            'start_button_text': self.tutorial.start_button_text,
+            'completion_title': self.tutorial.completion_title,
+            'completion_subtitle': self.tutorial.completion_subtitle,
+            'restart_button_text': self.tutorial.restart_button_text,
             'video_path': self.tutorial.video_path,
             'audio_path': self.tutorial.audio_path,
             'audio_offset': self.tutorial.audio_offset,
@@ -2389,6 +2456,12 @@ class Editor(QMainWindow):
         from ..model import Step
         
         self.tutorial.steps = [Step(**s) for s in state['steps']]
+        self.tutorial.title = state.get('title', self.tutorial.title)
+        self.tutorial.start_subtitle = state.get('start_subtitle', self.tutorial.start_subtitle)
+        self.tutorial.start_button_text = state.get('start_button_text', self.tutorial.start_button_text)
+        self.tutorial.completion_title = state.get('completion_title', self.tutorial.completion_title)
+        self.tutorial.completion_subtitle = state.get('completion_subtitle', self.tutorial.completion_subtitle)
+        self.tutorial.restart_button_text = state.get('restart_button_text', self.tutorial.restart_button_text)
         self.tutorial.video_path = state['video_path']
         self.tutorial.audio_path = state.get('audio_path')
         self.tutorial.audio_offset = state.get('audio_offset', 0.0)

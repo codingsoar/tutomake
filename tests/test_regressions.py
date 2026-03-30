@@ -1,4 +1,4 @@
-import os
+﻿import os
 import shutil
 import unittest
 import uuid
@@ -13,6 +13,7 @@ import numpy as np
 from PySide6.QtWidgets import QApplication
 
 from src.exporters.package_exporter import PackageExporter
+from src.exporters.web_exporter import WebExporter
 from src.model import Step, Tutorial
 from src.recorder import Recorder
 from src.ui.editor import Editor
@@ -126,6 +127,41 @@ class RegressionTests(unittest.TestCase):
         self.assertTrue(Path(recorder.audio_path).exists())
         with wave.open(recorder.audio_path, "rb") as wav_file:
             self.assertEqual(wav_file.getnchannels(), recorder.audio_channels)
+
+    def test_web_export_uses_custom_intro_and_completion_text(self):
+        tmpdir = self.make_tempdir()
+        self.addCleanup(self.cleanup_tempdir, tmpdir)
+        image_path = tmpdir / "source.png"
+        self._make_image(image_path)
+
+        custom_title = "\ucee4\uc2a4\ud140 \uc81c\ubaa9"
+        start_subtitle = "\uc2dc\uc791 \uc548\ub0b4"
+        start_button = "\ubc14\ub85c \uc2dc\uc791"
+        completion_title = "\uc644\ub8cc \uc81c\ubaa9"
+        completion_subtitle = "\uc644\ub8cc \uc548\ub0b4"
+        restart_button = "\ucc98\uc74c\ubd80\ud130 \ub2e4\uc2dc"
+
+        tutorial = Tutorial(
+            title=custom_title,
+            start_subtitle=start_subtitle,
+            start_button_text=start_button,
+            completion_title=completion_title,
+            completion_subtitle=completion_subtitle,
+            restart_button_text=restart_button,
+            steps=[Step(description="Click", image_path=str(image_path))],
+        )
+
+        html_path = tmpdir / "tutorial.html"
+        result = WebExporter(tutorial).export_html(str(html_path))
+
+        self.assertTrue(result)
+        html = html_path.read_text(encoding="utf-8")
+        self.assertIn(custom_title, html)
+        self.assertIn(start_subtitle, html)
+        self.assertIn(start_button, html)
+        self.assertIn(completion_title, html)
+        self.assertIn(completion_subtitle, html)
+        self.assertIn(restart_button, html)
 
     def test_editor_undo_restores_audio_state(self):
         tmpdir = self.make_tempdir()

@@ -45,6 +45,11 @@ class Step(BaseModel):
 class Tutorial(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     title: str = "New Tutorial"
+    start_subtitle: str = "인터랙티브 튜토리얼"
+    start_button_text: str = "시작하기"
+    completion_title: str = "튜토리얼 완료"
+    completion_subtitle: str = "모든 단계를 완료했습니다."
+    restart_button_text: str = "다시 시작"
     video_path: Optional[str] = None
     audio_path: Optional[str] = None      # External audio file path
     audio_offset: float = 0.0              # Audio sync offset in seconds (positive = audio delayed)

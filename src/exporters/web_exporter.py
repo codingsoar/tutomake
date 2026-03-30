@@ -74,7 +74,7 @@ class WebExporter:
         steps_json = json.dumps(steps_data)
         
         return f'''<!DOCTYPE html>
-<html lang="en">
+<html lang="ko">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -368,7 +368,7 @@ class WebExporter:
     <div class="header" id="header">
         <div class="step-badge" id="stepBadge">1</div>
         <div>
-            <div class="step-desc" id="stepDesc">Loading...</div>
+            <div class="step-desc" id="stepDesc">\ubd88\ub7ec\uc624\ub294 \uc911...</div>
             <div class="step-instruction" id="stepInstruction"></div>
         </div>
     </div>
@@ -403,16 +403,16 @@ class WebExporter:
     <!-- Start Screen -->
     <div class="screen-overlay" id="startScreen">
         <div class="screen-title">{self.tutorial.title}</div>
-        <div class="screen-subtitle">Interactive Tutorial</div>
-        <button class="screen-btn" id="startBtn" onclick="startTutorial()">▶ Start</button>
+        <div class="screen-subtitle">{self.tutorial.start_subtitle}</div>
+        <button class="screen-btn" id="startBtn" onclick="startTutorial()">{self.tutorial.start_button_text}</button>
     </div>
     
     <!-- Completion Screen -->
     <div class="screen-overlay hidden" id="completionScreen">
         <div class="completion-icon">🎉</div>
-        <div class="screen-title">Tutorial Complete!</div>
-        <div class="screen-subtitle">Great job! You've completed all steps.</div>
-        <button class="screen-btn" onclick="restartTutorial()">🔄 Restart</button>
+        <div class="screen-title">{self.tutorial.completion_title}</div>
+        <div class="screen-subtitle">{self.tutorial.completion_subtitle}</div>
+        <button class="screen-btn" onclick="restartTutorial()">{self.tutorial.restart_button_text}</button>
     </div>
     
     <script>
@@ -451,7 +451,7 @@ class WebExporter:
         function startTutorial() {{
             hasStarted = true;
             document.getElementById('startScreen').classList.add('hidden');
-            document.getElementById('startBtn').textContent = '🔄 Restart';
+            document.getElementById('startBtn').textContent = {json.dumps(self.tutorial.restart_button_text)};
             renderStep(0);
         }}
         
@@ -864,7 +864,7 @@ class WebExporter:
         steps_json = json.dumps(steps_data)
         
         return f'''<!DOCTYPE html>
-<html lang="en">
+<html lang="ko">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -1084,7 +1084,7 @@ class WebExporter:
     <div class="header" id="header">
         <div class="step-badge" id="stepBadge">1</div>
         <div>
-            <div class="step-desc" id="stepDesc">Loading...</div>
+            <div class="step-desc" id="stepDesc">\ubd88\ub7ec\uc624\ub294 \uc911...</div>
             <div class="step-instruction" id="stepInstruction"></div>
         </div>
     </div>
@@ -1112,15 +1112,15 @@ class WebExporter:
     
     <div class="screen-overlay" id="startScreen">
         <div class="screen-title">{self.tutorial.title}</div>
-        <div class="screen-subtitle">Interactive Video Tutorial</div>
-        <button class="screen-btn" id="startBtn" onclick="startTutorial()">▶ Start</button>
+        <div class="screen-subtitle">{self.tutorial.start_subtitle}</div>
+        <button class="screen-btn" id="startBtn" onclick="startTutorial()">{self.tutorial.start_button_text}</button>
     </div>
     
     <div class="screen-overlay hidden" id="completionScreen">
         <div class="completion-icon">🎉</div>
-        <div class="screen-title">Tutorial Complete!</div>
-        <div class="screen-subtitle">Great job!</div>
-        <button class="screen-btn" onclick="restartTutorial()">🔄 Restart</button>
+        <div class="screen-title">{self.tutorial.completion_title}</div>
+        <div class="screen-subtitle">{self.tutorial.completion_subtitle}</div>
+        <button class="screen-btn" onclick="restartTutorial()">{self.tutorial.restart_button_text}</button>
     </div>
     
     <script>
@@ -1142,7 +1142,7 @@ class WebExporter:
         
         function startTutorial() {{
             document.getElementById('startScreen').classList.add('hidden');
-            document.getElementById('startBtn').textContent = '🔄 Restart';
+            document.getElementById('startBtn').textContent = {json.dumps(self.tutorial.restart_button_text)};
             currentStep = 0;
             isPaused = false;
             video.currentTime = 0;
