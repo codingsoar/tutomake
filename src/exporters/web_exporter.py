@@ -384,8 +384,8 @@ class WebExporter:
     <!-- Keyboard Modal -->
     <div class="modal-overlay" id="keyboardModal">
         <div class="modal-content">
-            <div class="modal-title">⌨️ Type the required text</div>
-            <div class="modal-hint" id="modalHint">Enter the text shown below</div>
+            <div class="modal-title" id="modalTitle"></div>
+            <div class="modal-hint" id="modalHint"></div>
             <div class="modal-input-wrap" id="modalInputWrap">
                 <input type="text" class="modal-input" id="modalInput" autocomplete="off">
                 <div class="modal-input-ghost" id="modalInputGhost"></div>
@@ -429,6 +429,7 @@ class WebExporter:
         const stepImage = document.getElementById('stepImage');
         const hitbox = document.getElementById('hitbox');
         const keyboardModal = document.getElementById('keyboardModal');
+        const modalTitle = document.getElementById('modalTitle');
         const modalInput = document.getElementById('modalInput');
         const modalHint = document.getElementById('modalHint');
         const modalInputGhost = document.getElementById('modalInputGhost');
@@ -511,6 +512,10 @@ class WebExporter:
             modalInput.className = 'modal-input';
             document.onkeydown = null;
             const customInstruction = (step.instruction || '').trim();
+            modalTitle.textContent = customInstruction;
+            modalTitle.style.display = customInstruction ? 'block' : 'none';
+            modalHint.textContent = '';
+            modalHint.style.display = 'none';
             
             let expectedInput = step.keyboard_input.toLowerCase().trim();
             if (expectedInput.startsWith('key.')) expectedInput = expectedInput.substring(4);
@@ -537,15 +542,11 @@ class WebExporter:
             const isSpecial = (step.keyboard_mode || '') === 'key' || inferredSpecial;
             
             if (isSpecial) {{
-                modalHint.textContent = customInstruction || `Press: ${{step.keyboard_input}}`;
-                modalHint.style.display = 'block';
                 modalInput.style.display = 'none';
                 modalInputWrap.style.display = 'none';
                 modalInputGhost.textContent = '';
                 modalInputGhost.style.display = 'none';
             }} else {{
-                modalHint.textContent = customInstruction || '';
-                modalHint.style.display = customInstruction ? 'block' : 'none';
                 modalInput.style.display = 'block';
                 modalInputWrap.style.display = 'block';
                 modalInputGhost.textContent = step.keyboard_input;
@@ -1100,8 +1101,8 @@ class WebExporter:
     
     <div class="modal-overlay" id="keyboardModal">
         <div class="modal-content">
-            <div class="modal-title">⌨️ Type the required text</div>
-            <div class="modal-hint" id="modalHint">Enter the text</div>
+            <div class="modal-title" id="modalTitle"></div>
+            <div class="modal-hint" id="modalHint"></div>
             <div class="modal-input-wrap" id="modalInputWrap">
                 <input type="text" class="modal-input" id="modalInput" autocomplete="off">
                 <div class="modal-input-ghost" id="modalInputGhost"></div>
@@ -1131,6 +1132,7 @@ class WebExporter:
         const videoWrapper = document.getElementById('videoWrapper');
         const hitbox = document.getElementById('hitbox');
         const keyboardModal = document.getElementById('keyboardModal');
+        const modalTitle = document.getElementById('modalTitle');
         const modalInput = document.getElementById('modalInput');
         const modalHint = document.getElementById('modalHint');
         const modalInputGhost = document.getElementById('modalInputGhost');
@@ -1227,6 +1229,10 @@ class WebExporter:
             keyboardModal.classList.add('active');
             document.onkeydown = null;
             const customInstruction = (step.instruction || '').trim();
+            modalTitle.textContent = customInstruction;
+            modalTitle.style.display = customInstruction ? 'block' : 'none';
+            modalHint.textContent = '';
+            modalHint.style.display = 'none';
             
             let expectedInput = step.keyboard_input.toLowerCase().trim();
             if (expectedInput.startsWith('key.')) expectedInput = expectedInput.substring(4);
@@ -1253,15 +1259,11 @@ class WebExporter:
             const isSpecial = (step.keyboard_mode || '') === 'key' || inferredSpecial;
             
             if (isSpecial) {{
-                modalHint.textContent = customInstruction || `Press: ${{step.keyboard_input}}`;
-                modalHint.style.display = 'block';
                 modalInput.style.display = 'none';
                 modalInputWrap.style.display = 'none';
                 modalInputGhost.textContent = '';
                 modalInputGhost.style.display = 'none';
             }} else {{
-                modalHint.textContent = customInstruction || '';
-                modalHint.style.display = customInstruction ? 'block' : 'none';
                 modalInput.style.display = 'block';
                 modalInputWrap.style.display = 'block';
                 modalInputGhost.textContent = step.keyboard_input;
