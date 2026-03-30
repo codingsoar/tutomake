@@ -1,7 +1,8 @@
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QLabel, QApplication
 from PySide6.QtCore import Qt, Signal, QTimer
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QAction
 from ..recorder import Recorder
+from ..settings import Settings
 
 class RecorderOverlay(QWidget):
     stop_signal = Signal()
@@ -17,6 +18,7 @@ class RecorderOverlay(QWidget):
         self.setWindowTitle("Recorder")
         self.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         
         # Position at center-top of screen
         screen = QApplication.primaryScreen().geometry()
@@ -47,17 +49,30 @@ class RecorderOverlay(QWidget):
         
         # Show start state
         self.show_ready_state()
+        self.setup_shortcut()
+
+    def setup_shortcut(self):
+        shortcut = Settings().get_key("toggle_recording")
+        if shortcut.isEmpty():
+            return
+
+        self.toggle_action = QAction(self)
+        self.toggle_action.setShortcut(shortcut)
+        self.toggle_action.triggered.connect(self.toggle_recording)
+        self.addAction(self.toggle_action)
     
     def show_ready_state(self):
         """Show 'Click to Record' state."""
         self.rec_indicator.setStyleSheet("color: #888888;")
-        self.rec_label.setText("Click to Record")
+        self.rec_label.setText("Click or press shortcut to record")
         self.setStyleSheet("background-color: rgba(0, 0, 0, 0.85); border-radius: 18px;")
         self.adjustSize()
         
         # Position at bottom center (overlapping taskbar)
         screen = QApplication.primaryScreen().geometry()
         self.move(screen.width() // 2 - self.width() // 2, screen.height() - self.height() - 10)
+        self.setFocus()
+        self.activateWindow()
     
     def show_recording_state(self):
         """Show minimal REC indicator with transparency."""
@@ -164,6 +179,8 @@ class RecorderOverlay(QWidget):
             self.recorder.start()
             self.show_recording_state()
             self.show()
+            self.setFocus()
+            self.activateWindow()
     
     def hide_for_capture(self):
         self.hide()

@@ -50,6 +50,8 @@ class Tutorial(BaseModel):
     completion_title: str = "튜토리얼 완료"
     completion_subtitle: str = "모든 단계를 완료했습니다."
     restart_button_text: str = "다시 시작"
+    audio_input_device: Optional[int] = None
+    audio_input_name: str = "Default Input [Windows Default]"
     video_path: Optional[str] = None
     audio_path: Optional[str] = None      # External audio file path
     audio_offset: float = 0.0              # Audio sync offset in seconds (positive = audio delayed)

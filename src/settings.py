@@ -14,6 +14,7 @@ class Settings:
     def _init(self):
         self.settings_file = "settings.json"
         self.shortcuts = {
+            "toggle_recording": "Alt+S",
             "toggle_play": "Space",
             "frame_prev": "Left",
             "frame_next": "Right",

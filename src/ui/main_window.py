@@ -1,13 +1,12 @@
 import os
-import re
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-                             QPushButton, QStackedWidget, QMessageBox, QFileDialog, QLabel,
-                             QComboBox)
+                             QPushButton, QStackedWidget, QMessageBox, QFileDialog, QLabel, QMenu)
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QAction
 from ..model import Tutorial
 from ..recorder import Recorder
-from ..recorder import AUDIO_AVAILABLE, get_audio_input_devices
+from ..recorder import AUDIO_AVAILABLE
+from ..settings import Settings
 from .recorder_overlay import RecorderOverlay
 from .editor import Editor
 # Player will be imported later when ready
@@ -77,8 +76,6 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.tutorial = Tutorial(title="New TutoMake")
         self.recorder = None
-        self.audio_devices = []
-        
         self.setWindowTitle("TutoMake")
         self.resize(1200, 800)
         
@@ -112,19 +109,7 @@ class MainWindow(QMainWindow):
         self.btn_play.clicked.connect(self.play_tutorial)
         control_panel.addWidget(self.btn_play)
 
-        self.audio_input_label = QLabel("Mic:")
-        control_panel.addWidget(self.audio_input_label)
-
-        self.audio_input_combo = QComboBox()
-        self.audio_input_combo.setMinimumWidth(260)
-        control_panel.addWidget(self.audio_input_combo)
-
-        self.btn_refresh_audio = QPushButton("Refresh Audio")
-        self.btn_refresh_audio.clicked.connect(self.refresh_audio_inputs)
-        control_panel.addWidget(self.btn_refresh_audio)
-        
         # Export button with dropdown menu
-        from PySide6.QtWidgets import QMenu
         self.btn_export = QPushButton("📤 Export")
         self.export_menu = QMenu(self)
         
@@ -176,6 +161,10 @@ class MainWindow(QMainWindow):
         self.btn_theme.clicked.connect(self.toggle_theme)
         control_panel.addWidget(self.btn_theme)
 
+        self.btn_view = QPushButton("View")
+        self.btn_view.setToolTip("Show or hide property sections")
+        control_panel.addWidget(self.btn_view)
+
         # Settings Button
         self.btn_settings = QPushButton("⚙️")
         self.btn_settings.setToolTip("Settings / Shortcuts")
@@ -184,8 +173,6 @@ class MainWindow(QMainWindow):
 
         main_layout.addLayout(control_panel)
 
-        self.refresh_audio_inputs()
-        
         # Apply initial theme
         self.apply_theme()
 
@@ -200,6 +187,40 @@ class MainWindow(QMainWindow):
         # View 2: Player (To be added)
         # self.player = Player(self.tutorial)
         # self.stack.addWidget(self.player)
+
+        self._setup_shortcuts()
+        self._setup_view_button()
+
+    def _setup_shortcuts(self):
+        settings = Settings()
+        shortcut = settings.get_key("toggle_recording")
+        if shortcut.isEmpty():
+            return
+
+        self.record_shortcut_action = QAction(self)
+        self.record_shortcut_action.setShortcut(shortcut)
+        self.record_shortcut_action.triggered.connect(self.handle_record_shortcut)
+        self.addAction(self.record_shortcut_action)
+
+    def handle_record_shortcut(self):
+        if self.isHidden() or self.isMinimized():
+            return
+        self.start_recording_mode()
+
+    def _setup_view_button(self):
+        self.view_menu = QMenu(self)
+        self.property_section_actions = {}
+
+        for key, title in self.editor.get_property_sections().items():
+            action = QAction(title, self, checkable=True)
+            action.setChecked(self.editor.is_property_section_visible(key))
+            action.toggled.connect(
+                lambda checked, section_key=key: self.editor.set_property_section_visible(section_key, checked)
+            )
+            self.view_menu.addAction(action)
+            self.property_section_actions[key] = action
+
+        self.btn_view.setMenu(self.view_menu)
 
     def new_tutorial(self):
         self.tutorial = Tutorial()
@@ -235,8 +256,7 @@ class MainWindow(QMainWindow):
         
         # Initialize recorder - always use video mode
         storage_dir = os.path.join(os.getcwd(), "captures")
-        selected_device = self.audio_input_combo.currentData()
-        selected_name = self.audio_input_combo.currentText()
+        selected_device, selected_name = self.editor.get_selected_audio_input()
         self.recorder = Recorder(
             self.tutorial,
             storage_dir,
@@ -261,103 +281,6 @@ class MainWindow(QMainWindow):
             msg += f"\n\nPerformance:\n{self.recorder.last_recording_stats}"
             
         QMessageBox.information(self, "Done", msg)
-
-    def refresh_audio_inputs(self):
-        """Refresh the list of selectable audio input devices."""
-        self.audio_input_combo.clear()
-
-        if not AUDIO_AVAILABLE:
-            self.audio_input_combo.addItem("Mic unavailable: sounddevice missing", None)
-            self.audio_input_combo.setToolTip(
-                "Install the sounddevice package to enable microphone selection and audio recording."
-            )
-            self.audio_input_combo.setEnabled(False)
-            self.btn_refresh_audio.setEnabled(False)
-            return
-
-        self.audio_devices = get_audio_input_devices()
-        self.audio_input_combo.setToolTip("")
-        self.audio_input_combo.setEnabled(True)
-        self.btn_refresh_audio.setEnabled(True)
-
-        self.audio_input_combo.addItem("Default Input [Windows Default]", None)
-        for device in self._build_audio_input_options(self.audio_devices):
-            label = f"{device['type']} {device['name']} ({device['channels']} ch)"
-            if device.get("count", 1) > 1:
-                label += f" [merged {device['count']}]"
-            self.audio_input_combo.addItem(label, device["id"])
-
-    def _classify_audio_input(self, name: str) -> str:
-        lower_name = name.lower()
-        if (
-            "stereo mix" in lower_name
-            or "스테레오 믹스" in lower_name
-            or "stereo input" in lower_name
-        ):
-            return "System Audio"
-        if (
-            "buds" in lower_name
-            or "airpods" in lower_name
-            or "hands-free" in lower_name
-            or "수화기" in lower_name
-        ):
-            return "Bluetooth Mic"
-        return "Mic"
-
-    def _normalize_audio_device_name(self, name: str) -> str:
-        normalized = " ".join((name or "").split())
-        normalized = re.sub(r"@system32\\drivers\\[^;]+;?", "", normalized, flags=re.IGNORECASE)
-        normalized = re.sub(r"%\d+\s*hands-free%\d+", "", normalized, flags=re.IGNORECASE)
-        normalized = normalized.replace(";\r\n", " ")
-        normalized = normalized.replace(";", " ")
-        normalized = re.sub(r"\(\d+-\s*([^)]+)\)", r"(\1)", normalized)
-        normalized = re.sub(r"\(\s*([^)]+?)\s*\)", r"(\1)", normalized)
-        normalized = re.sub(r"High Definition Aud(?!io)", "High Definition Audio", normalized)
-        normalized = normalized.replace("((", "(").replace("))", ")")
-        if normalized.endswith("High Definition Audio"):
-            normalized += ")"
-        normalized = re.sub(r"\s+", " ", normalized)
-        return normalized.strip()
-
-    def _audio_device_sort_key(self, device: dict):
-        priority = {
-            "System Audio": 0,
-            "Bluetooth Mic": 1,
-            "Mic": 2,
-        }
-        return (
-            priority.get(device["type"], 99),
-            device["name"].lower(),
-            device["id"],
-        )
-
-    def _build_audio_input_options(self, devices):
-        grouped = {}
-
-        for device in devices:
-            normalized_name = self._normalize_audio_device_name(device["name"])
-            device_type = self._classify_audio_input(normalized_name)
-            if device_type == "Bluetooth Mic" and "hands-free" in normalized_name.lower():
-                continue
-            key = (device_type, normalized_name, device["channels"])
-            candidate = {
-                "id": device["id"],
-                "name": normalized_name,
-                "channels": device["channels"],
-                "type": device_type,
-                "count": 1,
-            }
-
-            existing = grouped.get(key)
-            if existing is None:
-                grouped[key] = candidate
-                continue
-
-            existing["count"] += 1
-            if candidate["id"] < existing["id"]:
-                existing["id"] = candidate["id"]
-
-        return sorted(grouped.values(), key=self._audio_device_sort_key)
 
     def refresh_editor(self):
         self.editor.set_tutorial(self.tutorial)

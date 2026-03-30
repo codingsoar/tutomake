@@ -62,6 +62,7 @@ class SettingsDialog(QDialog):
         
         # Human readable names mapping
         names = {
+            "toggle_recording": "Start/Stop Recording",
             "toggle_play": "Play/Pause",
             "frame_prev": "Previous Frame",
             "frame_next": "Next Frame",

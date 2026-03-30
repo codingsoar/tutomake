@@ -2,13 +2,15 @@ from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QListWidget,
                              QLabel, QLineEdit, QTextEdit, QFormLayout, QScrollArea, QSizePolicy,
                              QRadioButton, QButtonGroup, QCheckBox, QSlider, QPushButton,
                              QMenu, QMainWindow, QDockWidget, QGraphicsView, QGraphicsScene,
-                             QGraphicsRectItem, QGraphicsLineItem, QGraphicsTextItem)
+                             QGraphicsRectItem, QGraphicsLineItem, QGraphicsTextItem, QGroupBox,
+                             QComboBox)
 from PySide6.QtGui import QPixmap, QPainter, QPen, QColor, QResizeEvent, QImage, QAction, QPolygon, QFont, QBrush, QWheelEvent
 from PySide6.QtCore import Qt, QRect, QTimer, Signal, QPoint, QRectF, QPointF, QSignalBlocker
 import os
 import cv2
 from ..key_utils import display_key_name
 from ..model import Tutorial, Step
+from ..recorder import AUDIO_AVAILABLE, get_audio_input_devices
 
 class ZoomableImageCanvas(QWidget):
     """Image canvas with zoom/pan support for Editor."""
@@ -1379,6 +1381,32 @@ class TimelineGraphicsView(QGraphicsView):
 
     # add_step_at Removed - functionality moved to Editor via signals
 
+class CollapsibleSection(QGroupBox):
+    """A property section that can be collapsed while staying visible."""
+
+    def __init__(self, title: str, parent=None):
+        super().__init__(title, parent)
+        self.setCheckable(True)
+        self.setChecked(True)
+
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(10, 14, 10, 10)
+        outer_layout.setSpacing(8)
+
+        self.content_widget = QWidget(self)
+        self.form_layout = QFormLayout(self.content_widget)
+        self.form_layout.setContentsMargins(0, 0, 0, 0)
+        self.form_layout.setSpacing(8)
+        outer_layout.addWidget(self.content_widget)
+
+        self.toggled.connect(self._toggle_content)
+        self._toggle_content(True)
+
+    def _toggle_content(self, expanded: bool):
+        self.content_widget.setVisible(expanded)
+
+    def addRow(self, *args):
+        self.form_layout.addRow(*args)
 
 
 class Editor(QMainWindow):
@@ -1453,75 +1481,70 @@ class Editor(QMainWindow):
         self.props_dock = QDockWidget("Properties", self)
         self.props_dock.setFeatures(dock_features)
         
+        props_scroll = QScrollArea()
+        props_scroll.setWidgetResizable(True)
         props_widget = QWidget()
-        props_layout = QFormLayout(props_widget)
-        
+        self.props_container_layout = QVBoxLayout(props_widget)
+        self.props_container_layout.setContentsMargins(8, 8, 8, 8)
+        self.props_container_layout.setSpacing(10)
+
+        self.property_sections = {}
+        self.property_section_visibility = {}
+
+        step_section = self._create_property_section("step", "Step")
         self.desc_input = QLineEdit()
         self.desc_input.textChanged.connect(self.update_desc_preview)
         self.desc_input.editingFinished.connect(self.save_state)
-        props_layout.addRow("Description:", self.desc_input)
-        
-        # Instruction (multi-line detailed guidance)
+        step_section.addRow("Description:", self.desc_input)
+
         self.instruction_input = QTextEdit()
         self.instruction_input.setPlaceholderText("Enter step-by-step instruction here...")
         self.instruction_input.setMaximumHeight(80)
         self.instruction_input.textChanged.connect(self.update_instruction_preview)
         self.instruction_input.setTabChangesFocus(True)
-        props_layout.addRow("Instruction:", self.instruction_input)
-        
-        # Sound Checkbox
+        step_section.addRow("Instruction:", self.instruction_input)
+
         self.chk_sound = QCheckBox("Enable Click Sound")
         self.chk_sound.toggled.connect(self.update_sound)
-        props_layout.addRow("", self.chk_sound)
-        
-        # Text Input (for keyboard steps)
-        from PySide6.QtWidgets import QComboBox, QSpinBox
+        step_section.addRow("", self.chk_sound)
+
+        from PySide6.QtWidgets import QSpinBox
         self.keyboard_mode_combo = QComboBox()
         self.keyboard_mode_combo.addItem("Text Input", "text")
         self.keyboard_mode_combo.addItem("Key Input", "key")
         self.keyboard_mode_combo.currentIndexChanged.connect(self.update_keyboard_mode)
-        props_layout.addRow("Input Type:", self.keyboard_mode_combo)
+        step_section.addRow("Input Type:", self.keyboard_mode_combo)
 
         self.text_content = QLineEdit()
         self.text_content.setPlaceholderText("Expected keyboard input")
         self.text_content.textChanged.connect(self.update_keyboard_input_preview)
         self.text_content.editingFinished.connect(self.save_state)
-        props_layout.addRow("Expected Input:", self.text_content)
-        
-        # ==================== Text Style Section ====================
-        props_layout.addRow(QLabel(""))  # Spacer
-        text_style_label = QLabel("── Text Style ──")
-        text_style_label.setStyleSheet("font-weight: bold; color: #888;")
-        props_layout.addRow(text_style_label)
-        
-        # Font Family Dropdown (all system fonts)
+        step_section.addRow("Expected Input:", self.text_content)
+
+        text_style_section = self._create_property_section("text_style", "Text Style")
         from PySide6.QtGui import QFontDatabase
         self.font_family_combo = QComboBox()
         font_families = QFontDatabase.families()
         self.font_family_combo.addItems(font_families)
-        # Set default to Arial if available
         arial_idx = self.font_family_combo.findText("Arial")
         if arial_idx >= 0:
             self.font_family_combo.setCurrentIndex(arial_idx)
         self.font_family_combo.currentTextChanged.connect(self.update_text_style_preview)
-        props_layout.addRow("Font:", self.font_family_combo)
-        
-        # Font Size with SpinBox (up/down buttons)
+        text_style_section.addRow("Font:", self.font_family_combo)
+
         self.font_size_spinbox = QSpinBox()
         self.font_size_spinbox.setMinimum(8)
         self.font_size_spinbox.setMaximum(200)
         self.font_size_spinbox.setValue(24)
         self.font_size_spinbox.setSuffix(" pt")
         self.font_size_spinbox.valueChanged.connect(self.update_text_style_preview)
-        props_layout.addRow("Font Size:", self.font_size_spinbox)
-        
-        # Font Weight Dropdown
+        text_style_section.addRow("Font Size:", self.font_size_spinbox)
+
         self.font_weight_combo = QComboBox()
         self.font_weight_combo.addItems(["Normal", "Bold"])
         self.font_weight_combo.currentTextChanged.connect(self.update_text_style_preview)
-        props_layout.addRow("Font Weight:", self.font_weight_combo)
-        
-        # Text Color with preview
+        text_style_section.addRow("Font Weight:", self.font_weight_combo)
+
         text_color_layout = QHBoxLayout()
         self.text_color_input = QLineEdit()
         self.text_color_input.setPlaceholderText("#FFFFFF")
@@ -1534,9 +1557,8 @@ class Editor(QMainWindow):
         self.text_color_preview.mousePressEvent = lambda e: self.pick_text_color()
         text_color_layout.addWidget(self.text_color_input)
         text_color_layout.addWidget(self.text_color_preview)
-        props_layout.addRow("Text Color:", text_color_layout)
-        
-        # Background Color with preview
+        text_style_section.addRow("Text Color:", text_color_layout)
+
         bg_color_layout = QHBoxLayout()
         self.bg_color_input = QLineEdit()
         self.bg_color_input.setPlaceholderText("#000000")
@@ -1549,28 +1571,23 @@ class Editor(QMainWindow):
         self.bg_color_preview.mousePressEvent = lambda e: self.pick_bg_color()
         bg_color_layout.addWidget(self.bg_color_input)
         bg_color_layout.addWidget(self.bg_color_preview)
-        props_layout.addRow("Bg Color:", bg_color_layout)
-        
-        # ==================== Hitbox Style Section ====================
-        props_layout.addRow(QLabel(""))  # Spacer
-        hitbox_style_label = QLabel("── Hitbox Style ──")
-        hitbox_style_label.setStyleSheet("font-weight: bold; color: #888;")
-        props_layout.addRow(hitbox_style_label)
-        
-        # Shape Selection (moved into Hitbox Style)
+        text_style_section.addRow("Bg Color:", bg_color_layout)
+
+        hitbox_section = self._create_property_section("hitbox_style", "Hitbox Style")
         self.shape_group = QButtonGroup(self)
         self.radio_rect = QRadioButton("Rectangle")
         self.radio_circle = QRadioButton("Circle")
         self.shape_group.addButton(self.radio_rect)
         self.shape_group.addButton(self.radio_circle)
-        shape_layout = QHBoxLayout()
+        shape_layout = QVBoxLayout()
+        shape_layout.setContentsMargins(0, 0, 0, 0)
+        shape_layout.setSpacing(4)
         shape_layout.addWidget(self.radio_rect)
         shape_layout.addWidget(self.radio_circle)
-        props_layout.addRow("Shape:", shape_layout)
+        hitbox_section.addRow("Shape:", shape_layout)
         self.radio_rect.toggled.connect(self.update_shape)
         self.radio_circle.toggled.connect(self.update_shape)
-        
-        # Line Width Slider
+
         hitbox_width_layout = QHBoxLayout()
         self.hitbox_line_width_slider = QSlider(Qt.Orientation.Horizontal)
         self.hitbox_line_width_slider.setMinimum(1)
@@ -1580,15 +1597,13 @@ class Editor(QMainWindow):
         self.hitbox_line_width_label = QLabel("2")
         hitbox_width_layout.addWidget(self.hitbox_line_width_slider)
         hitbox_width_layout.addWidget(self.hitbox_line_width_label)
-        props_layout.addRow("Line Width:", hitbox_width_layout)
-        
-        # Line Style Dropdown
+        hitbox_section.addRow("Line Width:", hitbox_width_layout)
+
         self.hitbox_line_style_combo = QComboBox()
         self.hitbox_line_style_combo.addItems(["solid", "dashed", "dotted"])
         self.hitbox_line_style_combo.currentTextChanged.connect(self.update_hitbox_line_style)
-        props_layout.addRow("Line Style:", self.hitbox_line_style_combo)
-        
-        # Line Color Input with preview
+        hitbox_section.addRow("Line Style:", self.hitbox_line_style_combo)
+
         line_color_layout = QHBoxLayout()
         self.hitbox_line_color_input = QLineEdit()
         self.hitbox_line_color_input.setPlaceholderText("#FF0000")
@@ -1601,9 +1616,8 @@ class Editor(QMainWindow):
         self.hitbox_line_color_preview.mousePressEvent = lambda e: self.pick_hitbox_line_color()
         line_color_layout.addWidget(self.hitbox_line_color_input)
         line_color_layout.addWidget(self.hitbox_line_color_preview)
-        props_layout.addRow("Line Color:", line_color_layout)
-        
-        # Fill Color Input with preview (with alpha)
+        hitbox_section.addRow("Line Color:", line_color_layout)
+
         fill_color_layout = QHBoxLayout()
         self.hitbox_fill_color_input = QLineEdit()
         self.hitbox_fill_color_input.setPlaceholderText("#FF0000")
@@ -1616,93 +1630,88 @@ class Editor(QMainWindow):
         self.hitbox_fill_color_preview.mousePressEvent = lambda e: self.pick_hitbox_fill_color()
         fill_color_layout.addWidget(self.hitbox_fill_color_input)
         fill_color_layout.addWidget(self.hitbox_fill_color_preview)
-        props_layout.addRow("Fill Color:", fill_color_layout)
-        
-        # Fill Opacity Slider
+        hitbox_section.addRow("Fill Color:", fill_color_layout)
+
         fill_opacity_layout = QHBoxLayout()
         self.hitbox_fill_opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self.hitbox_fill_opacity_slider.setMinimum(0)
         self.hitbox_fill_opacity_slider.setMaximum(100)
-        self.hitbox_fill_opacity_slider.setValue(20)  # Default 20%
+        self.hitbox_fill_opacity_slider.setValue(20)
         self.hitbox_fill_opacity_slider.valueChanged.connect(self.update_hitbox_fill_opacity)
         self.hitbox_fill_opacity_label = QLabel("20%")
         fill_opacity_layout.addWidget(self.hitbox_fill_opacity_slider)
         fill_opacity_layout.addWidget(self.hitbox_fill_opacity_label)
-        props_layout.addRow("Fill Opacity:", fill_opacity_layout)
-        
-        # ==================== Audio Section ====================
-        props_layout.addRow(QLabel(""))  # Spacer
-        audio_section_label = QLabel("── Audio ──")
-        audio_section_label.setStyleSheet("font-weight: bold; color: #888;")
-        props_layout.addRow(audio_section_label)
-        
-        # Audio File Display
+        hitbox_section.addRow("Fill Opacity:", fill_opacity_layout)
+
+        audio_section = self._create_property_section("audio", "Audio")
+        audio_input_layout = QHBoxLayout()
+        self.audio_input_combo = QComboBox()
+        self.audio_input_combo.currentIndexChanged.connect(self.update_audio_input_selection)
+        audio_input_layout.addWidget(self.audio_input_combo, 1)
+        self.btn_refresh_audio_inputs = QPushButton("Refresh Inputs")
+        self.btn_refresh_audio_inputs.clicked.connect(self.refresh_audio_inputs)
+        audio_input_layout.addWidget(self.btn_refresh_audio_inputs)
+        audio_section.addRow("Input Device:", audio_input_layout)
+
         audio_file_layout = QHBoxLayout()
         self.audio_file_label = QLabel("No audio loaded")
         self.audio_file_label.setStyleSheet("color: #666; font-style: italic;")
         audio_file_layout.addWidget(self.audio_file_label, 1)
-        
-        # Import Audio Button
-        self.import_audio_btn = QPushButton("📁")
+
+        self.import_audio_btn = QPushButton("...")
         self.import_audio_btn.setToolTip("Import Audio File")
         self.import_audio_btn.setFixedWidth(30)
         self.import_audio_btn.clicked.connect(self.import_audio)
         audio_file_layout.addWidget(self.import_audio_btn)
-        
-        # Remove Audio Button
-        self.remove_audio_btn = QPushButton("❌")
+
+        self.remove_audio_btn = QPushButton("X")
         self.remove_audio_btn.setToolTip("Remove Audio")
         self.remove_audio_btn.setFixedWidth(30)
         self.remove_audio_btn.clicked.connect(self.remove_audio)
         self.remove_audio_btn.setEnabled(False)
         audio_file_layout.addWidget(self.remove_audio_btn)
-        
-        props_layout.addRow("Audio File:", audio_file_layout)
-        
-        # Audio Offset Slider (-10 to +10 seconds)
+        audio_section.addRow("Audio File:", audio_file_layout)
+
         offset_layout = QHBoxLayout()
         self.audio_offset_slider = QSlider(Qt.Orientation.Horizontal)
-        self.audio_offset_slider.setMinimum(-100)  # -10 seconds (in 0.1s steps)
-        self.audio_offset_slider.setMaximum(100)   # +10 seconds
+        self.audio_offset_slider.setMinimum(-100)
+        self.audio_offset_slider.setMaximum(100)
         self.audio_offset_slider.setValue(0)
         self.audio_offset_slider.valueChanged.connect(self.update_audio_offset)
         self.audio_offset_label = QLabel("0.0s")
         self.audio_offset_label.setMinimumWidth(40)
         offset_layout.addWidget(self.audio_offset_slider)
         offset_layout.addWidget(self.audio_offset_label)
-        props_layout.addRow("Sync Offset:", offset_layout)
+        audio_section.addRow("Sync Offset:", offset_layout)
 
-        # ==================== Export Text Section ====================
-        props_layout.addRow(QLabel(""))  # Spacer
-        export_text_label = QLabel("Web Export Text")
-        export_text_label.setStyleSheet("font-weight: bold; color: #888;")
-        props_layout.addRow(export_text_label)
-
+        export_text_section = self._create_property_section("web_export_text", "Web Export Text")
         self.tutorial_title_input = QLineEdit()
         self.tutorial_title_input.editingFinished.connect(self.update_export_text_fields)
-        props_layout.addRow("Tutorial Title:", self.tutorial_title_input)
+        export_text_section.addRow("Tutorial Title:", self.tutorial_title_input)
 
         self.start_subtitle_input = QLineEdit()
         self.start_subtitle_input.editingFinished.connect(self.update_export_text_fields)
-        props_layout.addRow("Start Subtitle:", self.start_subtitle_input)
+        export_text_section.addRow("Start Subtitle:", self.start_subtitle_input)
 
         self.start_button_input = QLineEdit()
         self.start_button_input.editingFinished.connect(self.update_export_text_fields)
-        props_layout.addRow("Start Button:", self.start_button_input)
+        export_text_section.addRow("Start Button:", self.start_button_input)
 
         self.completion_title_input = QLineEdit()
         self.completion_title_input.editingFinished.connect(self.update_export_text_fields)
-        props_layout.addRow("Completion Title:", self.completion_title_input)
+        export_text_section.addRow("Completion Title:", self.completion_title_input)
 
         self.completion_subtitle_input = QLineEdit()
         self.completion_subtitle_input.editingFinished.connect(self.update_export_text_fields)
-        props_layout.addRow("Completion Subtitle:", self.completion_subtitle_input)
+        export_text_section.addRow("Completion Subtitle:", self.completion_subtitle_input)
 
         self.restart_button_input = QLineEdit()
         self.restart_button_input.editingFinished.connect(self.update_export_text_fields)
-        props_layout.addRow("Restart Button:", self.restart_button_input)
-        
-        self.props_dock.setWidget(props_widget)
+        export_text_section.addRow("Restart Button:", self.restart_button_input)
+
+        self.props_container_layout.addStretch()
+        props_scroll.setWidget(props_widget)
+        self.props_dock.setWidget(props_scroll)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.props_dock)
         
         # ==================== Timeline Panel (Bottom Dock) ====================
@@ -1773,8 +1782,70 @@ class Editor(QMainWindow):
         self.refresh()
         self.save_state()
 
+    def _create_property_section(self, section_key: str, title: str) -> CollapsibleSection:
+        section = CollapsibleSection(title, self)
+        self.property_sections[section_key] = {"title": title, "widget": section}
+        self.property_section_visibility[section_key] = True
+        self.props_container_layout.addWidget(section)
+        return section
+
+    def get_property_sections(self):
+        return {key: value["title"] for key, value in self.property_sections.items()}
+
+    def set_property_section_visible(self, section_key: str, visible: bool):
+        section = self.property_sections.get(section_key)
+        if not section:
+            return
+        self.property_section_visibility[section_key] = visible
+        section["widget"].setVisible(visible)
+
+    def is_property_section_visible(self, section_key: str) -> bool:
+        return self.property_section_visibility.get(section_key, True)
+
+    def refresh_audio_inputs(self):
+        self.audio_input_combo.blockSignals(True)
+        self.audio_input_combo.clear()
+
+        if not AUDIO_AVAILABLE:
+            self.audio_input_combo.addItem("Mic unavailable: sounddevice missing", None)
+            self.audio_input_combo.setEnabled(False)
+            self.btn_refresh_audio_inputs.setEnabled(False)
+            self.audio_input_combo.blockSignals(False)
+            return
+
+        self.audio_input_combo.setEnabled(True)
+        self.btn_refresh_audio_inputs.setEnabled(True)
+        self.audio_input_combo.addItem("Default Input [Windows Default]", None)
+
+        for device in get_audio_input_devices():
+            self.audio_input_combo.addItem(
+                f"{device['name']} ({device['channels']} ch)",
+                device["id"],
+            )
+
+        selected_index = 0
+        for index in range(self.audio_input_combo.count()):
+            if self.audio_input_combo.itemData(index) == self.tutorial.audio_input_device:
+                selected_index = index
+                break
+            if self.audio_input_combo.itemText(index) == self.tutorial.audio_input_name:
+                selected_index = index
+
+        self.audio_input_combo.setCurrentIndex(selected_index)
+        self.audio_input_combo.blockSignals(False)
+
+    def update_audio_input_selection(self):
+        self.tutorial.audio_input_device = self.audio_input_combo.currentData()
+        self.tutorial.audio_input_name = self.audio_input_combo.currentText() or "Default Input [Windows Default]"
+        self.save_state()
+
+    def get_selected_audio_input(self):
+        return self.audio_input_combo.currentData(), self.audio_input_combo.currentText()
+
     def _sync_audio_ui(self):
         """Synchronize audio controls with the current tutorial state."""
+        self.refresh_audio_inputs()
+
         if self.tutorial.audio_path:
             filename = os.path.basename(self.tutorial.audio_path)
             self.audio_file_label.setText(filename)
@@ -2424,6 +2495,8 @@ class Editor(QMainWindow):
             'completion_title': self.tutorial.completion_title,
             'completion_subtitle': self.tutorial.completion_subtitle,
             'restart_button_text': self.tutorial.restart_button_text,
+            'audio_input_device': self.tutorial.audio_input_device,
+            'audio_input_name': self.tutorial.audio_input_name,
             'video_path': self.tutorial.video_path,
             'audio_path': self.tutorial.audio_path,
             'audio_offset': self.tutorial.audio_offset,
@@ -2462,6 +2535,8 @@ class Editor(QMainWindow):
         self.tutorial.completion_title = state.get('completion_title', self.tutorial.completion_title)
         self.tutorial.completion_subtitle = state.get('completion_subtitle', self.tutorial.completion_subtitle)
         self.tutorial.restart_button_text = state.get('restart_button_text', self.tutorial.restart_button_text)
+        self.tutorial.audio_input_device = state.get('audio_input_device', self.tutorial.audio_input_device)
+        self.tutorial.audio_input_name = state.get('audio_input_name', self.tutorial.audio_input_name)
         self.tutorial.video_path = state['video_path']
         self.tutorial.audio_path = state.get('audio_path')
         self.tutorial.audio_offset = state.get('audio_offset', 0.0)
