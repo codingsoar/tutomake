@@ -1736,14 +1736,37 @@ class Editor(QMainWindow):
 
     def set_tutorial(self, tutorial: Tutorial):
         self.tutorial = tutorial
+        self.history_stack = []
+        self.history_index = -1
         self.timeline.set_tutorial(tutorial)
+        self._sync_audio_ui()
         self.refresh()
+        self.save_state()
+
+    def _sync_audio_ui(self):
+        """Synchronize audio controls with the current tutorial state."""
+        if self.tutorial.audio_path:
+            filename = os.path.basename(self.tutorial.audio_path)
+            self.audio_file_label.setText(filename)
+            self.audio_file_label.setStyleSheet("color: #0a0; font-style: normal;")
+            self.remove_audio_btn.setEnabled(True)
+        else:
+            self.audio_file_label.setText("No audio loaded")
+            self.audio_file_label.setStyleSheet("color: #666; font-style: italic;")
+            self.remove_audio_btn.setEnabled(False)
+
+        self.audio_offset_slider.blockSignals(True)
+        self.audio_offset_slider.setValue(int(round(self.tutorial.audio_offset * 10)))
+        self.audio_offset_slider.blockSignals(False)
+        self.audio_offset_label.setText(f"{self.tutorial.audio_offset:+.1f}s")
 
     def refresh(self):
         previous_row = self.step_list.currentRow()
         self.step_list.clear()
         for i, step in enumerate(self.tutorial.steps):
             self.step_list.addItem(f"Step {i+1}: {step.description}")
+
+        self._sync_audio_ui()
         
         # Always use video mode if video is available
         has_video = bool(self.tutorial.video_path and os.path.exists(self.tutorial.video_path))
@@ -2334,7 +2357,9 @@ class Editor(QMainWindow):
         # Create a deep copy of steps
         state = {
             'steps': [step.model_dump() for step in self.tutorial.steps],
-            'video_path': self.tutorial.video_path
+            'video_path': self.tutorial.video_path,
+            'audio_path': self.tutorial.audio_path,
+            'audio_offset': self.tutorial.audio_offset,
         }
         
         self.history_stack.append(state)
@@ -2365,6 +2390,9 @@ class Editor(QMainWindow):
         
         self.tutorial.steps = [Step(**s) for s in state['steps']]
         self.tutorial.video_path = state['video_path']
+        self.tutorial.audio_path = state.get('audio_path')
+        self.tutorial.audio_offset = state.get('audio_offset', 0.0)
+        self._sync_audio_ui()
         self.refresh()
         self.timeline.update()
     

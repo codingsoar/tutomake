@@ -20,12 +20,42 @@ except ImportError:
     AUDIO_AVAILABLE = False
     print("Warning: sounddevice not installed. Audio recording disabled.")
 
+
+def get_audio_input_devices():
+    """Return available input devices as dicts with id/name/channel info."""
+    if not AUDIO_AVAILABLE:
+        return []
+
+    devices = []
+    try:
+        for index, device in enumerate(sd.query_devices()):
+            if device.get("max_input_channels", 0) <= 0:
+                continue
+            devices.append({
+                "id": index,
+                "name": device.get("name", f"Input {index}"),
+                "channels": int(device.get("max_input_channels", 0)),
+            })
+    except Exception as e:
+        print(f"Failed to query audio devices: {e}")
+    return devices
+
 class Recorder:
-    def __init__(self, tutorial: Tutorial, storage_dir: str, video_mode: bool = False, record_audio: bool = True):
+    def __init__(
+        self,
+        tutorial: Tutorial,
+        storage_dir: str,
+        video_mode: bool = False,
+        record_audio: bool = True,
+        audio_device=None,
+        audio_device_name: Optional[str] = None,
+    ):
         self.tutorial = tutorial
         self.storage_dir = storage_dir
         self.video_mode = video_mode
         self.record_audio = record_audio and AUDIO_AVAILABLE
+        self.audio_device = audio_device
+        self.audio_device_name = audio_device_name or "Default Input"
         if not os.path.exists(self.storage_dir):
             os.makedirs(self.storage_dir)
             
@@ -268,7 +298,8 @@ class Recorder:
         
         try:
             with sd.InputStream(samplerate=self.audio_sample_rate, 
-                               channels=self.audio_channels, 
+                               channels=self.audio_channels,
+                               device=self.audio_device,
                                callback=audio_callback):
                 while not self.stop_event.is_set():
                     time.sleep(0.1)
@@ -299,6 +330,7 @@ class Recorder:
                 wav_file.setframerate(self.audio_sample_rate)
                 wav_file.writeframes(audio_array.tobytes())
 
+            self.tutorial.audio_path = self.audio_path
             print(f"Audio saved to: {self.audio_path}")
             
             # Merge video and audio using ffmpeg
@@ -327,6 +359,7 @@ class Recorder:
             if result.returncode == 0:
                 # Replace video path with merged file
                 self.tutorial.video_path = merged_path
+                self.tutorial.audio_path = None
                 print(f"Merged video+audio saved to: {merged_path}")
                 
                 # Clean up original files
@@ -485,17 +518,27 @@ class Recorder:
                     
             # Handle special keys as separate steps
             elif key == keyboard.Key.delete:
+                if self.key_buffer:
+                    self._save_keyboard_step()
                 self._save_special_key_step("delete")
             elif key == keyboard.Key.tab:
+                if self.key_buffer:
+                    self._save_keyboard_step()
                 self._save_special_key_step("tab")
             elif key == keyboard.Key.esc:
+                if self.key_buffer:
+                    self._save_keyboard_step()
                 self._save_special_key_step("esc")
             elif hasattr(key, 'name') and key.name:
                 # Handle F-keys and arrow keys
                 key_name = key.name
                 if key_name.startswith('f') and key_name[1:].isdigit():
+                    if self.key_buffer:
+                        self._save_keyboard_step()
                     self._save_special_key_step(key_name)
                 elif key_name in ['up', 'down', 'left', 'right']:
+                    if self.key_buffer:
+                        self._save_keyboard_step()
                     self._save_special_key_step(key_name)
                     
         except AttributeError:

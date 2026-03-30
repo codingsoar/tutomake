@@ -1,4 +1,6 @@
 __pycache__/
+tests/_tmp/
+tests/__pycache__/
 *.py[cod]
 
 build/

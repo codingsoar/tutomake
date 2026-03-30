@@ -147,7 +147,7 @@ window.onbeforeunload = function() {
         
         # Create output directory
         output_dir = os.path.dirname(output_path)
-        if not os.path.exists(output_dir):
+        if output_dir and not os.path.exists(output_dir):
             os.makedirs(output_dir)
         
         # Export HTML first
@@ -206,16 +206,10 @@ For now, double-click the .bat file or open the .html directly.
             if self.progress_callback:
                 self.progress_callback(30)
             
-            # Export Markdown
-            doc_exporter = DocumentExporter(self.tutorial)
-            doc_exporter.export_markdown(os.path.join(temp_dir, 'tutorial.md'))
-            
-            if self.progress_callback:
-                self.progress_callback(50)
-            
             # Export PNG sequence
             png_dir = os.path.join(temp_dir, 'images')
-            doc_exporter.export_png_sequence(png_dir)
+            doc_exporter = DocumentExporter(self.tutorial)
+            doc_exporter.export_markdown(os.path.join(temp_dir, 'tutorial.md'), png_dir)
             
             if self.progress_callback:
                 self.progress_callback(70)

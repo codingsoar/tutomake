@@ -157,8 +157,10 @@ class DocumentExporter:
     
     def export_markdown(self, output_path: str, image_dir: str = None) -> bool:
         """Export as Markdown document."""
+        image_ref_dir = None
         if image_dir:
             self.export_png_sequence(image_dir)
+            image_ref_dir = os.path.basename(os.path.normpath(image_dir))
         
         lines = [
             f"# {self.tutorial.title}",
@@ -175,10 +177,11 @@ class DocumentExporter:
                 lines.append(f"> 💡 {step.instruction}")
                 lines.append("")
             
-            if image_dir:
+            if image_ref_dir:
                 img_path = f"step_{i+1:03d}.png"
-                lines.append(f"![Step {i+1}]({image_dir}/{img_path})")
-                lines.append("")
+                if os.path.exists(os.path.join(image_dir, img_path)):
+                    lines.append(f"![Step {i+1}]({image_ref_dir}/{img_path})")
+                    lines.append("")
             
             if step.action_type == "keyboard":
                 lines.append(f"**Type:** `{step.keyboard_input}`")

@@ -1,0 +1,176 @@
+import os
+import shutil
+import unittest
+import uuid
+import wave
+from pathlib import Path
+from unittest import mock
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+import cv2
+import numpy as np
+from PySide6.QtWidgets import QApplication
+
+from src.exporters.package_exporter import PackageExporter
+from src.model import Step, Tutorial
+from src.recorder import Recorder
+from src.ui.editor import Editor
+from pynput import keyboard
+
+
+class DummyCharKey:
+    def __init__(self, char: str):
+        self.char = char
+        self.vk = None
+
+
+class RegressionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+        cls.workspace_tmp_root = Path(__file__).resolve().parent.parent / ".test_tmp"
+        cls.workspace_tmp_root.mkdir(exist_ok=True)
+
+    def _make_image(self, path: Path):
+        image = np.full((32, 32, 3), 255, dtype=np.uint8)
+        ok = cv2.imwrite(str(path), image)
+        self.assertTrue(ok)
+
+    def make_tempdir(self) -> Path:
+        path = self.workspace_tmp_root / uuid.uuid4().hex
+        path.mkdir(parents=True, exist_ok=False)
+        return path
+
+    def cleanup_tempdir(self, path: Path):
+        shutil.rmtree(path, ignore_errors=True)
+
+    def test_export_exe_allows_basename_output_path(self):
+        tutorial = Tutorial(title="Export Test")
+        exporter = PackageExporter(tutorial)
+
+        tmpdir = self.make_tempdir()
+        self.addCleanup(self.cleanup_tempdir, tmpdir)
+        previous_cwd = os.getcwd()
+        os.chdir(tmpdir)
+        try:
+            result = exporter.export_exe("demo.exe")
+            self.assertTrue(result)
+            self.assertTrue((tmpdir / "demo.html").exists())
+            self.assertTrue((tmpdir / "demo_launcher.bat").exists())
+        finally:
+            os.chdir(previous_cwd)
+
+    def test_portable_package_uses_relative_markdown_image_paths(self):
+        tmpdir = self.make_tempdir()
+        self.addCleanup(self.cleanup_tempdir, tmpdir)
+        image_path = tmpdir / "source.png"
+        self._make_image(image_path)
+
+        tutorial = Tutorial(
+            title="Portable",
+            steps=[Step(description="Click", image_path=str(image_path))],
+        )
+
+        output_path = tmpdir / "portable.zip"
+        result = PackageExporter(tutorial).create_portable_package(str(output_path))
+
+        self.assertTrue(result)
+        import zipfile
+
+        with zipfile.ZipFile(output_path) as zf:
+            markdown = zf.read("tutorial.md").decode("utf-8")
+            self.assertIn("![Step 1](images/step_001.png)", markdown)
+            self.assertIn("images/step_001.png", zf.namelist())
+
+    def test_recorder_flushes_text_buffer_before_special_key_step(self):
+        tmpdir = self.make_tempdir()
+        self.addCleanup(self.cleanup_tempdir, tmpdir)
+        tutorial = Tutorial()
+        recorder = Recorder(tutorial, str(tmpdir))
+        recorder.is_recording = True
+        recorder.start_time = 0.0
+        recorder.frame_count = 24
+        recorder.fps = 24.0
+
+        recorder._on_key_press(DummyCharKey("a"))
+        recorder._on_key_press(DummyCharKey("b"))
+        recorder._on_key_press(keyboard.Key.tab)
+
+        self.assertEqual(len(tutorial.steps), 2)
+        self.assertEqual(tutorial.steps[0].keyboard_input, "ab")
+        self.assertEqual(tutorial.steps[0].keyboard_mode, "text")
+        self.assertEqual(tutorial.steps[1].keyboard_input, "tab")
+        self.assertEqual(tutorial.steps[1].keyboard_mode, "key")
+
+    def test_recorder_keeps_audio_path_when_audio_saved_separately(self):
+        tmpdir = self.make_tempdir()
+        self.addCleanup(self.cleanup_tempdir, tmpdir)
+        tutorial = Tutorial()
+        recorder = Recorder(tutorial, str(tmpdir), video_mode=True)
+        recorder.audio_path = str(tmpdir / "audio.wav")
+        recorder.video_path = str(tmpdir / "video.avi")
+        recorder.audio_data = [np.zeros((8, 2), dtype=np.float32)]
+
+        real_import = __import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "imageio_ffmpeg":
+                raise ImportError("forced for test")
+            return real_import(name, *args, **kwargs)
+
+        with mock.patch("builtins.__import__", side_effect=fake_import):
+            recorder._save_and_merge_audio()
+
+        self.assertEqual(tutorial.audio_path, recorder.audio_path)
+        self.assertTrue(Path(recorder.audio_path).exists())
+        with wave.open(recorder.audio_path, "rb") as wav_file:
+            self.assertEqual(wav_file.getnchannels(), recorder.audio_channels)
+
+    def test_editor_undo_restores_audio_state(self):
+        tmpdir = self.make_tempdir()
+        self.addCleanup(self.cleanup_tempdir, tmpdir)
+        tutorial = Tutorial(title="Editor")
+        editor = Editor(tutorial)
+        self.addCleanup(editor.close)
+
+        tutorial.audio_path = str(tmpdir / "narration.wav")
+        tutorial.audio_offset = 1.5
+        editor.save_state()
+
+        tutorial.audio_path = None
+        tutorial.audio_offset = 0.0
+        editor.save_state()
+        editor.undo()
+
+        self.assertEqual(editor.tutorial.audio_path, str(tmpdir / "narration.wav"))
+        self.assertEqual(editor.tutorial.audio_offset, 1.5)
+        self.assertEqual(editor.audio_file_label.text(), "narration.wav")
+        self.assertEqual(editor.audio_offset_slider.value(), 15)
+
+    def test_editor_set_tutorial_resets_history_and_syncs_audio_ui(self):
+        tmpdir = self.make_tempdir()
+        self.addCleanup(self.cleanup_tempdir, tmpdir)
+        editor = Editor(Tutorial(title="First"))
+        self.addCleanup(editor.close)
+
+        editor.tutorial.audio_path = str(tmpdir / "old.wav")
+        editor.tutorial.audio_offset = -0.5
+        editor.save_state()
+
+        new_tutorial = Tutorial(
+            title="Second",
+            audio_path=str(tmpdir / "new.wav"),
+            audio_offset=2.0,
+        )
+        editor.set_tutorial(new_tutorial)
+
+        self.assertEqual(len(editor.history_stack), 1)
+        self.assertEqual(editor.history_index, 0)
+        self.assertEqual(editor.audio_file_label.text(), "new.wav")
+        self.assertEqual(editor.audio_offset_slider.value(), 20)
+        self.assertEqual(editor.audio_offset_label.text(), "+2.0s")
+
+
+if __name__ == "__main__":
+    unittest.main()
