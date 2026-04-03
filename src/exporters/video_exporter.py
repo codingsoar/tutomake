@@ -109,6 +109,8 @@ class VideoExporter:
             # Text
             cv2.putText(frame, step.keyboard_input, (x + 10, y + 35),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        elif step.action_type == "mouse_drag":
+            frame = self._draw_drag_overlay(frame, step)
         else:
             # Draw hitbox for click steps
             x, y = step.x, step.y
@@ -128,6 +130,36 @@ class VideoExporter:
                 frame = cv2.addWeighted(overlay, 0.3, frame, 0.7, 0)
                 cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 0, 255), 2)
         
+        return frame
+
+    def _draw_drag_overlay(self, frame: np.ndarray, step: Step) -> np.ndarray:
+        overlay = frame.copy()
+
+        start_x, start_y = step.x, step.y
+        start_w, start_h = step.width, step.height
+        end_x = getattr(step, "drag_end_x", step.x)
+        end_y = getattr(step, "drag_end_y", step.y)
+        end_w = getattr(step, "drag_end_width", step.width)
+        end_h = getattr(step, "drag_end_height", step.height)
+
+        start_center = (start_x + start_w // 2, start_y + start_h // 2)
+        end_center = (end_x + end_w // 2, end_y + end_h // 2)
+
+        cv2.rectangle(overlay, (start_x, start_y), (start_x + start_w, start_y + start_h), (255, 140, 0), -1)
+        cv2.rectangle(overlay, (end_x, end_y), (end_x + end_w, end_y + end_h), (0, 200, 0), -1)
+        frame = cv2.addWeighted(overlay, 0.25, frame, 0.75, 0)
+
+        cv2.rectangle(frame, (start_x, start_y), (start_x + start_w, start_y + start_h), (255, 140, 0), 3)
+        cv2.rectangle(frame, (end_x, end_y), (end_x + end_w, end_y + end_h), (0, 200, 0), 3)
+        cv2.arrowedLine(frame, start_center, end_center, (0, 220, 255), 4, tipLength=0.18)
+
+        label = (step.instruction or step.description or "Drag").strip()
+        text_x = min(start_x, end_x)
+        text_y = max(min(start_y, end_y) - 18, 32)
+        text_w = min(max(len(label) * 11, 260), 700)
+        cv2.rectangle(frame, (text_x, text_y - 30), (text_x + text_w, text_y + 8), (0, 0, 0), -1)
+        cv2.putText(frame, label, (text_x + 12, text_y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
         return frame
     
     def export_gif(self, output_path: str, fps: float = 10.0, scale: float = 0.5) -> bool:

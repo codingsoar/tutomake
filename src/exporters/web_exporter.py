@@ -15,6 +15,29 @@ class WebExporter:
     def __init__(self, tutorial: Tutorial, progress_callback: Optional[Callable[[int], None]] = None):
         self.tutorial = tutorial
         self.progress_callback = progress_callback
+
+    def _serialize_step(self, step: Step, index: int) -> dict:
+        return {
+            'index': index + 1,
+            'description': step.description,
+            'instruction': step.instruction,
+            'action_type': step.action_type,
+            'timestamp': step.timestamp,
+            'click_button': step.click_button,
+            'drag_button': getattr(step, 'drag_button', 'left'),
+            'x': step.x,
+            'y': step.y,
+            'width': step.width,
+            'height': step.height,
+            'drag_end_x': getattr(step, 'drag_end_x', step.x),
+            'drag_end_y': getattr(step, 'drag_end_y', step.y),
+            'drag_end_width': getattr(step, 'drag_end_width', step.width),
+            'drag_end_height': getattr(step, 'drag_end_height', step.height),
+            'drag_min_distance': getattr(step, 'drag_min_distance', 30),
+            'shape': step.shape,
+            'keyboard_mode': step.keyboard_mode,
+            'keyboard_input': step.keyboard_input,
+        }
     
     def export_html(self, output_path: str, embed_images: bool = True) -> bool:
         """Export as standalone HTML webpage with interactive tutorial."""
@@ -23,20 +46,8 @@ class WebExporter:
         # Prepare step data and images
         steps_data = []
         for i, step in enumerate(self.tutorial.steps):
-            step_info = {
-                'index': i + 1,
-                'description': step.description,
-                'instruction': step.instruction,
-                'action_type': step.action_type,
-                'x': step.x,
-                'y': step.y,
-                'width': step.width,
-                'height': step.height,
-                'shape': step.shape,
-                'keyboard_mode': step.keyboard_mode,
-                'keyboard_input': step.keyboard_input,
-                'image': ''
-            }
+            step_info = self._serialize_step(step, i)
+            step_info['image'] = ''
             
             # Get image
             img = None
@@ -178,6 +189,20 @@ class WebExporter:
         }}
         .hitbox.circle {{
             border-radius: 50%;
+        }}
+        .drag-target {{
+            border-color: #22c55e;
+            background: rgba(34, 197, 94, 0.25);
+            pointer-events: none;
+        }}
+        .drag-line {{
+            position: absolute;
+            height: 4px;
+            background: linear-gradient(90deg, #f59e0b, #38bdf8);
+            transform-origin: 0 50%;
+            display: none;
+            pointer-events: none;
+            box-shadow: 0 0 10px rgba(56, 189, 248, 0.45);
         }}
         
         @keyframes pulse {{
@@ -378,6 +403,8 @@ class WebExporter:
         <div class="canvas-inner" id="canvasInner">
             <img class="step-image" id="stepImage" src="" alt="">
             <div class="hitbox" id="hitbox"></div>
+            <div class="hitbox drag-target" id="dragTarget"></div>
+            <div class="drag-line" id="dragLine"></div>
         </div>
     </div>
     
@@ -428,12 +455,15 @@ class WebExporter:
         const canvasInner = document.getElementById('canvasInner');
         const stepImage = document.getElementById('stepImage');
         const hitbox = document.getElementById('hitbox');
+        const dragTarget = document.getElementById('dragTarget');
+        const dragLine = document.getElementById('dragLine');
         const keyboardModal = document.getElementById('keyboardModal');
         const modalTitle = document.getElementById('modalTitle');
         const modalInput = document.getElementById('modalInput');
         const modalHint = document.getElementById('modalHint');
         const modalInputGhost = document.getElementById('modalInputGhost');
         const modalInputWrap = document.getElementById('modalInputWrap');
+        let tutorialDrag = null;
         
         // Initialize
         function init() {{
@@ -489,21 +519,99 @@ class WebExporter:
         function updateHitbox(step) {{
             // Update hitbox after image is loaded and fitted
             // Hitbox is INSIDE canvasInner which has CSS transform, so use ORIGINAL coordinates
+            hidePointerOverlays();
             if (step.action_type === 'keyboard') {{
-                hitbox.style.display = 'none';
                 showKeyboardModal(step);
+            }} else if (step.action_type === 'mouse_drag') {{
+                hideKeyboardModal();
+                positionDragOverlay(step);
             }} else {{
                 hideKeyboardModal();
-                hitbox.style.display = 'block';
-                
-                // Use original coordinates - CSS transform on canvasInner handles scaling
-                hitbox.style.left = step.x + 'px';
-                hitbox.style.top = step.y + 'px';
-                hitbox.style.width = step.width + 'px';
-                hitbox.style.height = step.height + 'px';
-                hitbox.className = 'hitbox' + (step.shape === 'circle' ? ' circle' : '');
-                hitbox.style.background = 'rgba(255, 68, 68, 0.3)';
+                positionClickHitbox(step);
             }}
+        }}
+
+        function hidePointerOverlays() {{
+            tutorialDrag = null;
+            hitbox.style.display = 'none';
+            dragTarget.style.display = 'none';
+            dragLine.style.display = 'none';
+        }}
+
+        function positionClickHitbox(step) {{
+            hitbox.style.display = 'block';
+            hitbox.style.left = step.x + 'px';
+            hitbox.style.top = step.y + 'px';
+            hitbox.style.width = step.width + 'px';
+            hitbox.style.height = step.height + 'px';
+            hitbox.className = 'hitbox' + (step.shape === 'circle' ? ' circle' : '');
+            hitbox.style.background = 'rgba(255, 68, 68, 0.3)';
+        }}
+
+        function positionDragOverlay(step) {{
+            positionClickHitbox(step);
+            dragTarget.style.display = 'block';
+            dragTarget.style.left = step.drag_end_x + 'px';
+            dragTarget.style.top = step.drag_end_y + 'px';
+            dragTarget.style.width = step.drag_end_width + 'px';
+            dragTarget.style.height = step.drag_end_height + 'px';
+            dragTarget.className = 'hitbox drag-target' + (step.shape === 'circle' ? ' circle' : '');
+
+            const startCenter = {{
+                x: step.x + (step.width / 2),
+                y: step.y + (step.height / 2)
+            }};
+            const endCenter = {{
+                x: step.drag_end_x + (step.drag_end_width / 2),
+                y: step.drag_end_y + (step.drag_end_height / 2)
+            }};
+            const dx = endCenter.x - startCenter.x;
+            const dy = endCenter.y - startCenter.y;
+
+            dragLine.style.display = 'block';
+            dragLine.style.left = startCenter.x + 'px';
+            dragLine.style.top = startCenter.y + 'px';
+            dragLine.style.width = Math.hypot(dx, dy) + 'px';
+            dragLine.style.transform = `rotate(${{Math.atan2(dy, dx)}}rad)`;
+            tutorialDrag = {{
+                active: false,
+                validDistance: false,
+                startPoint: null
+            }};
+        }}
+
+        function pointInStepArea(step, x, y, useDragEnd = false) {{
+            const left = useDragEnd ? step.drag_end_x : step.x;
+            const top = useDragEnd ? step.drag_end_y : step.y;
+            const width = useDragEnd ? step.drag_end_width : step.width;
+            const height = useDragEnd ? step.drag_end_height : step.height;
+
+            if (step.shape === 'circle') {{
+                const rx = width / 2;
+                const ry = height / 2;
+                if (rx <= 0 || ry <= 0) return false;
+                const cx = left + rx;
+                const cy = top + ry;
+                const dx = (x - cx) / rx;
+                const dy = (y - cy) / ry;
+                return (dx * dx) + (dy * dy) <= 1;
+            }}
+
+            return x >= left && x <= left + width && y >= top && y <= top + height;
+        }}
+
+        function clientToImagePoint(clientX, clientY) {{
+            const rect = canvasInner.getBoundingClientRect();
+            return {{
+                x: (clientX - rect.left) / scale,
+                y: (clientY - rect.top) / scale
+            }};
+        }}
+
+        function mouseButtonName(button) {{
+            if (button === 1) return 'middle';
+            if (button === 2) return 'right';
+            return 'left';
         }}
         
         function showKeyboardModal(step) {{
@@ -624,6 +732,21 @@ class WebExporter:
         
         // Hitbox click
         hitbox.addEventListener('click', function(e) {{
+            const step = steps[currentStep];
+            if (!step || step.action_type !== 'click') return;
+            if ((step.click_button || 'left') !== 'left') return;
+            e.stopPropagation();
+            this.style.background = 'rgba(0, 255, 0, 0.5)';
+            setTimeout(() => nextStep(), 200);
+        }});
+
+        hitbox.addEventListener('auxclick', function(e) {{
+            const step = steps[currentStep];
+            if (!step || step.action_type !== 'click') return;
+            const required = step.click_button || 'left';
+            const clicked = e.button === 1 ? 'middle' : (e.button === 2 ? 'right' : 'left');
+            if (required !== clicked) return;
+            e.preventDefault();
             e.stopPropagation();
             this.style.background = 'rgba(0, 255, 0, 0.5)';
             setTimeout(() => nextStep(), 200);
@@ -639,6 +762,21 @@ class WebExporter:
             }});
             
             canvasContainer.addEventListener('mousedown', function(e) {{
+                const step = steps[currentStep];
+                if (step && step.action_type === 'mouse_drag') {{
+                    const requiredButton = step.drag_button || 'left';
+                    if (mouseButtonName(e.button) !== requiredButton) return;
+                    const point = clientToImagePoint(e.clientX, e.clientY);
+                    if (pointInStepArea(step, point.x, point.y, false)) {{
+                        tutorialDrag = {{
+                            active: true,
+                            validDistance: false,
+                            startPoint: point
+                        }};
+                        e.preventDefault();
+                        return;
+                    }}
+                }}
                 if (e.target === hitbox) return;
                 isDragging = true;
                 dragStart = {{x: e.clientX - panX, y: e.clientY - panY}};
@@ -646,13 +784,39 @@ class WebExporter:
             }});
             
             document.addEventListener('mousemove', function(e) {{
+                if (tutorialDrag && tutorialDrag.active) {{
+                    const point = clientToImagePoint(e.clientX, e.clientY);
+                    const step = steps[currentStep];
+                    tutorialDrag.validDistance = Math.hypot(
+                        point.x - tutorialDrag.startPoint.x,
+                        point.y - tutorialDrag.startPoint.y
+                    ) >= (step.drag_min_distance || 30);
+                    return;
+                }}
                 if (!isDragging) return;
                 panX = e.clientX - dragStart.x;
                 panY = e.clientY - dragStart.y;
                 updateTransform();
             }});
             
-            document.addEventListener('mouseup', function() {{
+            document.addEventListener('mouseup', function(e) {{
+                const step = steps[currentStep];
+                if (step && step.action_type === 'mouse_drag' && tutorialDrag && tutorialDrag.active) {{
+                    const requiredButton = step.drag_button || 'left';
+                    if (mouseButtonName(e.button) !== requiredButton) {{
+                        tutorialDrag.active = false;
+                        return;
+                    }}
+                    const point = clientToImagePoint(e.clientX, e.clientY);
+                    const completed = tutorialDrag.validDistance && pointInStepArea(step, point.x, point.y, true);
+                    tutorialDrag.active = false;
+                    if (completed) {{
+                        hitbox.style.background = 'rgba(0, 255, 0, 0.5)';
+                        dragTarget.style.background = 'rgba(0, 255, 0, 0.45)';
+                        setTimeout(() => nextStep(), 200);
+                    }}
+                    return;
+                }}
                 isDragging = false;
                 canvasContainer.style.cursor = 'grab';
             }});
@@ -828,20 +992,7 @@ class WebExporter:
         # Prepare step data
         steps_data = []
         for i, step in enumerate(self.tutorial.steps):
-            step_info = {
-                'index': i + 1,
-                'description': step.description,
-                'instruction': step.instruction,
-                'action_type': step.action_type,
-                'timestamp': step.timestamp,
-                'x': step.x,
-                'y': step.y,
-                'width': step.width,
-                'height': step.height,
-                'shape': step.shape,
-                'keyboard_mode': step.keyboard_mode,
-                'keyboard_input': step.keyboard_input
-            }
+            step_info = self._serialize_step(step, i)
             steps_data.append(step_info)
         
         # Copy audio file if exists
@@ -964,6 +1115,20 @@ class WebExporter:
         }}
         .hitbox.circle {{
             border-radius: 50%;
+        }}
+        .drag-target {{
+            border-color: #22c55e;
+            background: rgba(34, 197, 94, 0.25);
+            pointer-events: none;
+        }}
+        .drag-line {{
+            position: absolute;
+            height: 4px;
+            background: linear-gradient(90deg, #f59e0b, #38bdf8);
+            transform-origin: 0 50%;
+            display: none;
+            pointer-events: none;
+            box-shadow: 0 0 10px rgba(56, 189, 248, 0.45);
         }}
         
         @keyframes pulse {{
@@ -1090,10 +1255,12 @@ class WebExporter:
         </div>
     </div>
     
-    <div class="video-container">
+        <div class="video-container">
         <div class="video-wrapper" id="videoWrapper">
             <video id="video" src="{video_file}" preload="auto"></video>
             <div class="hitbox" id="hitbox"></div>
+            <div class="hitbox drag-target" id="dragTarget"></div>
+            <div class="drag-line" id="dragLine"></div>
         </div>
     </div>
     
@@ -1132,6 +1299,8 @@ class WebExporter:
         const video = document.getElementById('video');
         const videoWrapper = document.getElementById('videoWrapper');
         const hitbox = document.getElementById('hitbox');
+        const dragTarget = document.getElementById('dragTarget');
+        const dragLine = document.getElementById('dragLine');
         const keyboardModal = document.getElementById('keyboardModal');
         const modalTitle = document.getElementById('modalTitle');
         const modalInput = document.getElementById('modalInput');
@@ -1140,6 +1309,7 @@ class WebExporter:
         const modalInputWrap = document.getElementById('modalInputWrap');
         const audio = document.getElementById('audio');
         const audioOffset = {self.tutorial.audio_offset};  // Audio sync offset in seconds
+        let tutorialDrag = null;
         
         function startTutorial() {{
             document.getElementById('startScreen').classList.add('hidden');
@@ -1183,10 +1353,12 @@ class WebExporter:
             document.getElementById('stepDesc').textContent = step.description;
             document.getElementById('stepInstruction').textContent = step.instruction || '';
             document.getElementById('progressBar').style.width = ((currentStep + 1) / steps.length * 100) + '%';
-            
+            hidePointerOverlays();
             if (step.action_type === 'keyboard') {{
-                hitbox.style.display = 'none';
                 showKeyboardModal(step);
+            }} else if (step.action_type === 'mouse_drag') {{
+                hideKeyboardModal();
+                positionDragOverlay(step);
             }} else {{
                 hideKeyboardModal();
                 positionHitbox(step);
@@ -1206,14 +1378,107 @@ class WebExporter:
             hitbox.className = 'hitbox' + (step.shape === 'circle' ? ' circle' : '');
             hitbox.style.background = 'rgba(255, 68, 68, 0.3)';
         }}
+
+        function hidePointerOverlays() {{
+            tutorialDrag = null;
+            hitbox.style.display = 'none';
+            dragTarget.style.display = 'none';
+            dragLine.style.display = 'none';
+        }}
+
+        function positionDragOverlay(step) {{
+            const videoRect = video.getBoundingClientRect();
+            const scaleX = videoRect.width / video.videoWidth;
+            const scaleY = videoRect.height / video.videoHeight;
+
+            positionHitbox(step);
+            dragTarget.style.display = 'block';
+            dragTarget.style.left = (step.drag_end_x * scaleX) + 'px';
+            dragTarget.style.top = (step.drag_end_y * scaleY) + 'px';
+            dragTarget.style.width = (step.drag_end_width * scaleX) + 'px';
+            dragTarget.style.height = (step.drag_end_height * scaleY) + 'px';
+            dragTarget.className = 'hitbox drag-target' + (step.shape === 'circle' ? ' circle' : '');
+
+            const startCenter = {{
+                x: (step.x + (step.width / 2)) * scaleX,
+                y: (step.y + (step.height / 2)) * scaleY
+            }};
+            const endCenter = {{
+                x: (step.drag_end_x + (step.drag_end_width / 2)) * scaleX,
+                y: (step.drag_end_y + (step.drag_end_height / 2)) * scaleY
+            }};
+            const dx = endCenter.x - startCenter.x;
+            const dy = endCenter.y - startCenter.y;
+
+            dragLine.style.display = 'block';
+            dragLine.style.left = startCenter.x + 'px';
+            dragLine.style.top = startCenter.y + 'px';
+            dragLine.style.width = Math.hypot(dx, dy) + 'px';
+            dragLine.style.transform = `rotate(${{Math.atan2(dy, dx)}}rad)`;
+            tutorialDrag = {{
+                active: false,
+                validDistance: false,
+                startPoint: null
+            }};
+        }}
+
+        function pointInStepArea(step, x, y, useDragEnd = false) {{
+            const left = useDragEnd ? step.drag_end_x : step.x;
+            const top = useDragEnd ? step.drag_end_y : step.y;
+            const width = useDragEnd ? step.drag_end_width : step.width;
+            const height = useDragEnd ? step.drag_end_height : step.height;
+
+            if (step.shape === 'circle') {{
+                const rx = width / 2;
+                const ry = height / 2;
+                if (rx <= 0 || ry <= 0) return false;
+                const cx = left + rx;
+                const cy = top + ry;
+                const dx = (x - cx) / rx;
+                const dy = (y - cy) / ry;
+                return (dx * dx) + (dy * dy) <= 1;
+            }}
+
+            return x >= left && x <= left + width && y >= top && y <= top + height;
+        }}
+
+        function clientToVideoPoint(clientX, clientY) {{
+            const videoRect = video.getBoundingClientRect();
+            const scaleX = videoRect.width / video.videoWidth;
+            const scaleY = videoRect.height / video.videoHeight;
+            return {{
+                x: (clientX - videoRect.left) / scaleX,
+                y: (clientY - videoRect.top) / scaleY
+            }};
+        }}
+
+        function mouseButtonName(button) {{
+            if (button === 1) return 'middle';
+            if (button === 2) return 'right';
+            return 'left';
+        }}
         
         hitbox.addEventListener('click', function() {{
+            const step = steps[currentStep];
+            if (!step || step.action_type !== 'click') return;
+            if ((step.click_button || 'left') !== 'left') return;
+            this.style.background = 'rgba(0, 255, 0, 0.5)';
+            setTimeout(nextStep, 200);
+        }});
+
+        hitbox.addEventListener('auxclick', function(e) {{
+            const step = steps[currentStep];
+            if (!step || step.action_type !== 'click') return;
+            const required = step.click_button || 'left';
+            const clicked = e.button === 1 ? 'middle' : (e.button === 2 ? 'right' : 'left');
+            if (required !== clicked) return;
+            e.preventDefault();
             this.style.background = 'rgba(0, 255, 0, 0.5)';
             setTimeout(nextStep, 200);
         }});
         
         function nextStep() {{
-            hitbox.style.display = 'none';
+            hidePointerOverlays();
             currentStep++;
             isPaused = false;
             
@@ -1321,6 +1586,49 @@ class WebExporter:
             document.onkeydown = null;
             keyboardModal.classList.remove('active');
         }}
+
+        videoWrapper.addEventListener('mousedown', function(e) {{
+            const step = steps[currentStep];
+            if (!step || step.action_type !== 'mouse_drag') return;
+            const requiredButton = step.drag_button || 'left';
+            if (mouseButtonName(e.button) !== requiredButton) return;
+            const point = clientToVideoPoint(e.clientX, e.clientY);
+            if (!pointInStepArea(step, point.x, point.y, false)) return;
+            tutorialDrag = {{
+                active: true,
+                validDistance: false,
+                startPoint: point
+            }};
+            e.preventDefault();
+        }});
+
+        window.addEventListener('mousemove', function(e) {{
+            const step = steps[currentStep];
+            if (!step || step.action_type !== 'mouse_drag' || !tutorialDrag || !tutorialDrag.active) return;
+            const point = clientToVideoPoint(e.clientX, e.clientY);
+            tutorialDrag.validDistance = Math.hypot(
+                point.x - tutorialDrag.startPoint.x,
+                point.y - tutorialDrag.startPoint.y
+            ) >= (step.drag_min_distance || 30);
+        }});
+
+        window.addEventListener('mouseup', function(e) {{
+            const step = steps[currentStep];
+            if (!step || step.action_type !== 'mouse_drag' || !tutorialDrag || !tutorialDrag.active) return;
+            const requiredButton = step.drag_button || 'left';
+            if (mouseButtonName(e.button) !== requiredButton) {{
+                tutorialDrag.active = false;
+                return;
+            }}
+            const point = clientToVideoPoint(e.clientX, e.clientY);
+            const completed = tutorialDrag.validDistance && pointInStepArea(step, point.x, point.y, true);
+            tutorialDrag.active = false;
+            if (completed) {{
+                hitbox.style.background = 'rgba(0, 255, 0, 0.5)';
+                dragTarget.style.background = 'rgba(0, 255, 0, 0.45)';
+                setTimeout(nextStep, 200);
+            }}
+        }});
 
         modalInput.addEventListener('input', function() {{
             modalInputGhost.style.display = modalInput.value ? 'none' : 'flex';

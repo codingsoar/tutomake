@@ -7,12 +7,19 @@ from .key_utils import is_special_key_name
 class Step(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     image_path: str = ""
-    action_type: str = "click"  # click, keyboard
+    action_type: str = "click"  # click, keyboard, mouse_drag
     click_button: str = "left"  # left, right, middle
     x: int = 0
     y: int = 0
     width: int = 50  # Default hitbox size
     height: int = 50
+    drag_button: str = "left"  # left, right, middle
+    drag_end_x: int = 0
+    drag_end_y: int = 0
+    drag_end_width: int = 50
+    drag_end_height: int = 50
+    drag_path_tolerance: int = 40
+    drag_min_distance: int = 30
     description: str = "Click here"
     instruction: str = ""  # Detailed instruction text for tutorial followers
     shape: str = "rect" # rect, circle

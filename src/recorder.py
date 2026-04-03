@@ -1,5 +1,6 @@
 import time
 import threading
+import math
 from typing import Callable, Optional
 from pynput import mouse, keyboard
 import mss
@@ -82,6 +83,10 @@ class Recorder:
         # Keyboard recording buffer
         self.key_buffer = ""
         self.key_buffer_start_time = 0.0
+        self.middle_press_pos: Optional[tuple[int, int]] = None
+        self.middle_last_pos: Optional[tuple[int, int]] = None
+        self.middle_press_timestamp: float = 0.0
+        self.middle_drag_threshold = 30
 
     def start(self):
         if self.is_recording:
@@ -148,7 +153,7 @@ class Recorder:
             self.tutorial.video_path = None
         
         # Mouse listener
-        self.listener = mouse.Listener(on_click=self._on_click)
+        self.listener = mouse.Listener(on_click=self._on_click, on_move=self._on_move)
         self.listener.start()
         
         # Keyboard listener for text input recording
@@ -374,20 +379,13 @@ class Recorder:
         except Exception as e:
             print(f"Audio save/merge error: {e}")
 
+    def _on_move(self, x, y):
+        if self.middle_press_pos is not None:
+            self.middle_last_pos = (x, y)
+
     def _on_click(self, x, y, button, pressed):
-        if not self.is_recording or not pressed:
+        if not self.is_recording:
             return
-        
-        # Save any pending keyboard input first
-        if self.key_buffer:
-            self._save_keyboard_step()
-            
-        # Capture timestamp based on FRAMES, not time
-        # This ensures sync even if recording lags
-        if hasattr(self, 'frame_count') and hasattr(self, 'fps') and self.fps > 0:
-            current_video_time = self.frame_count / self.fps
-        else:
-            current_video_time = 0.0
         
         # Determine button type
         from pynput.mouse import Button
@@ -399,16 +397,48 @@ class Recorder:
             button_name = "Middle"
         else:
             button_name = "Click"
-            
+
+        if pressed and self.key_buffer:
+            self._save_keyboard_step()
+
+        current_video_time = self._get_current_video_time()
+
+        if button == Button.middle:
+            if pressed:
+                self.middle_press_pos = (x, y)
+                self.middle_last_pos = (x, y)
+                self.middle_press_timestamp = current_video_time
+            else:
+                press_pos = self.middle_press_pos
+                last_pos = self.middle_last_pos or (x, y)
+                timestamp = self.middle_press_timestamp
+                self.middle_press_pos = None
+                self.middle_last_pos = None
+                self.middle_press_timestamp = 0.0
+
+                if not press_pos:
+                    return
+
+                distance = math.hypot(last_pos[0] - press_pos[0], last_pos[1] - press_pos[1])
+                if distance >= self.middle_drag_threshold:
+                    threading.Thread(
+                        target=self._capture_drag_step,
+                        args=(press_pos[0], press_pos[1], last_pos[0], last_pos[1], timestamp, "middle"),
+                    ).start()
+                else:
+                    threading.Thread(
+                        target=self._capture_step,
+                        args=(x, y, timestamp, button_name),
+                    ).start()
+            return
+
+        if not pressed:
+            return
+
         # We can still capture a screenshot for the thumbnail/list view
         threading.Thread(target=self._capture_step, args=(x, y, current_video_time, button_name)).start()
 
-    def _capture_step(self, x, y, timestamp, button_name="Click"):
-        # We'll stick to full screen capture for the step image for now, 
-        # but in video mode, we rely on the video mainly. 
-        # The step image serves as a visual reference in the Editor.
-        
-        # Generate filename
+    def _capture_monitor_screenshot(self, x, y, action_label="Click"):
         ts_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         filename = f"step_{ts_str}.png"
         filepath = os.path.join(self.storage_dir, filename)
@@ -428,10 +458,10 @@ class Recorder:
                 )
                 if not in_recorded_monitor:
                     print(
-                        f"Ignoring {button_name} click at {x}, {y}: "
+                        f"Ignoring {action_label} at {x}, {y}: "
                         "outside recorded monitor bounds"
                     )
-                    return
+                    return None, None, None
             else:
                 monitor_idx = 1
                 for i, m in enumerate(sct.monitors[1:], 1):
@@ -440,13 +470,19 @@ class Recorder:
                         monitor_idx = i
                         break
                 monitor = sct.monitors[monitor_idx]
-            
+
             sct_img = sct.grab(monitor)
             mss.tools.to_png(sct_img.rgb, sct_img.size, output=filepath)
 
-            # Record offsets for coordinate calculation
-            monitor_left = monitor["left"]
-            monitor_top = monitor["top"]
+        return filepath, monitor["left"], monitor["top"]
+
+    def _capture_step(self, x, y, timestamp, button_name="Click"):
+        # We'll stick to full screen capture for the step image for now, 
+        # but in video mode, we rely on the video mainly. 
+        # The step image serves as a visual reference in the Editor.
+        filepath, monitor_left, monitor_top = self._capture_monitor_screenshot(x, y, f"{button_name} click")
+        if not filepath:
+            return
         
         width = 50
         height = 50
@@ -465,11 +501,67 @@ class Recorder:
             description=f"{button_name} click here",
             timestamp=timestamp
         )
-        self.tutorial.steps.append(step)
+        self._insert_step_sorted(step)
         print(f"Captured {button_name} click at {x}, {y} (timestamp={timestamp:.3f}s)")
         
         if self.on_step_callback:
             self.on_step_callback(step)
+
+    def _capture_drag_step(self, start_x, start_y, end_x, end_y, timestamp, button_name="middle"):
+        filepath, monitor_left, monitor_top = self._capture_monitor_screenshot(start_x, start_y, f"{button_name} drag")
+        if not filepath:
+            return
+
+        width = 50
+        height = 50
+        rel_start_x = start_x - monitor_left
+        rel_start_y = start_y - monitor_top
+        rel_end_x = end_x - monitor_left
+        rel_end_y = end_y - monitor_top
+        distance = math.hypot(rel_end_x - rel_start_x, rel_end_y - rel_start_y)
+
+        step = Step(
+            image_path=filepath,
+            action_type="mouse_drag",
+            x=int(rel_start_x - width / 2),
+            y=int(rel_start_y - height / 2),
+            width=width,
+            height=height,
+            drag_button=button_name.lower(),
+            drag_end_x=int(rel_end_x - width / 2),
+            drag_end_y=int(rel_end_y - height / 2),
+            drag_end_width=width,
+            drag_end_height=height,
+            drag_min_distance=max(int(distance * 0.35), self.middle_drag_threshold),
+            description=f"{button_name.title()} drag here",
+            instruction=self._build_drag_instruction(rel_start_x, rel_start_y, rel_end_x, rel_end_y, button_name),
+            timestamp=timestamp
+        )
+        self._insert_step_sorted(step)
+        print(
+            f"Captured {button_name.title()} drag from {start_x}, {start_y} "
+            f"to {end_x}, {end_y} (timestamp={timestamp:.3f}s)"
+        )
+
+        if self.on_step_callback:
+            self.on_step_callback(step)
+
+    def _build_drag_instruction(self, start_x, start_y, end_x, end_y, button_name="middle"):
+        dx = end_x - start_x
+        dy = end_y - start_y
+        if abs(dx) >= abs(dy):
+            direction = "right" if dx >= 0 else "left"
+        else:
+            direction = "down" if dy >= 0 else "up"
+        return f"Press the {button_name} mouse button and drag {direction}"
+
+    def _insert_step_sorted(self, step: Step):
+        insert_idx = 0
+        for i, existing_step in enumerate(self.tutorial.steps):
+            if existing_step.timestamp > step.timestamp:
+                break
+            insert_idx = i + 1
+        self.tutorial.steps.insert(insert_idx, step)
 
     def _on_key_press(self, key):
         """Handle keyboard input during recording."""
@@ -574,7 +666,7 @@ class Recorder:
                 break
             insert_idx = i + 1
         
-        self.tutorial.steps.insert(insert_idx, step)
+        self._insert_step_sorted(step)
         print(f"Captured keyboard step: '{self.key_buffer}' (timestamp={timestamp:.3f}s)")
         
         # Clear buffer
@@ -606,7 +698,7 @@ class Recorder:
                 break
             insert_idx = i + 1
         
-        self.tutorial.steps.insert(insert_idx, step)
+        self._insert_step_sorted(step)
         print(f"Captured special key: {normalized_key_name} (timestamp={timestamp:.3f}s)")
         
         if self.on_step_callback:

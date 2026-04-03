@@ -5,6 +5,7 @@ from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 import winsound
 import os
 import re
+import math
 import cv2
 import numpy as np
 from ..key_utils import display_key_name, is_special_key_name, normalize_key_name
@@ -94,6 +95,8 @@ class ZoomableVideoWidget(QWidget):
         # Overlay state
         self.current_step = None
         self.waiting_for_click = False
+        self.drag_preview_active = False
+        self.drag_current_image_pos = None
         
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -102,6 +105,11 @@ class ZoomableVideoWidget(QWidget):
     def set_overlay_state(self, step, waiting):
         self.current_step = step
         self.waiting_for_click = waiting
+        self.drag_preview_active = False
+        self.drag_current_image_pos = None
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        if step and waiting and step.action_type == "mouse_drag":
+            self.drag_preview_active = True
         self.update()
     
     def setPixmap(self, pixmap: QPixmap):
@@ -210,44 +218,89 @@ class ZoomableVideoWidget(QWidget):
         # Draw hitbox overlay
         if self.waiting_for_click and self.current_step:
             step = self.current_step
-            
-            # Scale hitbox coordinates
-            hitbox_x = int(step.x * self.scale + offset_x)
-            hitbox_y = int(step.y * self.scale + offset_y)
-            hitbox_w = int(step.width * self.scale)
-            hitbox_h = int(step.height * self.scale)
-            
-            # Parse hitbox line color
-            line_color = QColor(step.hitbox_line_color) if step.hitbox_line_color else QColor(255, 165, 0)
-            
-            # Parse hitbox fill color with opacity
-            fill_color_str = step.hitbox_fill_color or "#FF0000"
-            fill_color = QColor(fill_color_str[:7]) if fill_color_str.startswith("#") else QColor(255, 165, 0)
-            fill_opacity = step.hitbox_fill_opacity if hasattr(step, 'hitbox_fill_opacity') else 20
-            fill_color.setAlpha(int(fill_opacity * 255 / 100))
-            
-            # Map line style
-            line_style_map = {
-                "solid": Qt.PenStyle.SolidLine,
-                "dashed": Qt.PenStyle.DashLine,
-                "dotted": Qt.PenStyle.DotLine
-            }
-            pen_style = line_style_map.get(step.hitbox_line_style, Qt.PenStyle.SolidLine)
-            
-            # Hitbox with custom styling
-            line_width = max(1, int(step.hitbox_line_width * self.scale)) if step.hitbox_line_width else 4
-            pen = QPen(line_color, line_width, pen_style)
-            painter.setPen(pen)
-            painter.setBrush(fill_color)
-            
-            hitbox_rect = QRect(hitbox_x, hitbox_y, hitbox_w, hitbox_h)
-            if step.shape == "circle":
-                painter.drawEllipse(hitbox_rect)
+            display_text = step.instruction if step.instruction else step.description
+
+            if step.action_type == "mouse_drag":
+                start_rect = QRect(
+                    int(step.x * self.scale + offset_x),
+                    int(step.y * self.scale + offset_y),
+                    int(step.width * self.scale),
+                    int(step.height * self.scale),
+                )
+                end_rect = QRect(
+                    int(getattr(step, "drag_end_x", step.x) * self.scale + offset_x),
+                    int(getattr(step, "drag_end_y", step.y) * self.scale + offset_y),
+                    int(getattr(step, "drag_end_width", step.width) * self.scale),
+                    int(getattr(step, "drag_end_height", step.height) * self.scale),
+                )
+
+                line_width = max(2, int((step.hitbox_line_width or 2) * self.scale))
+                painter.setPen(QPen(QColor("#F59E0B"), line_width, Qt.PenStyle.SolidLine))
+                painter.setBrush(QColor(245, 158, 11, 55))
+                painter.drawEllipse(start_rect)
+                painter.setPen(QPen(QColor("#22C55E"), line_width, Qt.PenStyle.DashLine))
+                painter.setBrush(QColor(34, 197, 94, 45))
+                painter.drawEllipse(end_rect)
+
+                start_center = start_rect.center()
+                end_center = end_rect.center()
+                painter.setPen(QPen(QColor("#38BDF8"), max(2, line_width), Qt.PenStyle.SolidLine))
+                painter.drawLine(start_center, end_center)
+
+                angle = math.atan2(end_center.y() - start_center.y(), end_center.x() - start_center.x())
+                arrow_size = max(12, int(18 * self.scale))
+                left = QPoint(
+                    int(end_center.x() - arrow_size * math.cos(angle - math.pi / 6)),
+                    int(end_center.y() - arrow_size * math.sin(angle - math.pi / 6)),
+                )
+                right = QPoint(
+                    int(end_center.x() - arrow_size * math.cos(angle + math.pi / 6)),
+                    int(end_center.y() - arrow_size * math.sin(angle + math.pi / 6)),
+                )
+                painter.drawLine(end_center, left)
+                painter.drawLine(end_center, right)
+
+                if self.drag_preview_active and self.drag_current_image_pos is not None:
+                    current_pos = self.image_to_screen(self.drag_current_image_pos)
+                    painter.setPen(QPen(QColor("#38BDF8"), max(2, line_width), Qt.PenStyle.DashLine))
+                    painter.drawLine(start_center, current_pos)
             else:
-                painter.drawRect(hitbox_rect)
+                # Scale hitbox coordinates
+                hitbox_x = int(step.x * self.scale + offset_x)
+                hitbox_y = int(step.y * self.scale + offset_y)
+                hitbox_w = int(step.width * self.scale)
+                hitbox_h = int(step.height * self.scale)
+                
+                # Parse hitbox line color
+                line_color = QColor(step.hitbox_line_color) if step.hitbox_line_color else QColor(255, 165, 0)
+                
+                # Parse hitbox fill color with opacity
+                fill_color_str = step.hitbox_fill_color or "#FF0000"
+                fill_color = QColor(fill_color_str[:7]) if fill_color_str.startswith("#") else QColor(255, 165, 0)
+                fill_opacity = step.hitbox_fill_opacity if hasattr(step, 'hitbox_fill_opacity') else 20
+                fill_color.setAlpha(int(fill_opacity * 255 / 100))
+                
+                # Map line style
+                line_style_map = {
+                    "solid": Qt.PenStyle.SolidLine,
+                    "dashed": Qt.PenStyle.DashLine,
+                    "dotted": Qt.PenStyle.DotLine
+                }
+                pen_style = line_style_map.get(step.hitbox_line_style, Qt.PenStyle.SolidLine)
+                
+                # Hitbox with custom styling
+                line_width = max(1, int(step.hitbox_line_width * self.scale)) if step.hitbox_line_width else 4
+                pen = QPen(line_color, line_width, pen_style)
+                painter.setPen(pen)
+                painter.setBrush(fill_color)
+                
+                hitbox_rect = QRect(hitbox_x, hitbox_y, hitbox_w, hitbox_h)
+                if step.shape == "circle":
+                    painter.drawEllipse(hitbox_rect)
+                else:
+                    painter.drawRect(hitbox_rect)
             
             # Description / Instruction box
-            display_text = step.instruction if step.instruction else step.description
             painter.setBrush(QColor(0, 0, 0, 180))
             painter.setPen(Qt.PenStyle.NoPen)
             
@@ -256,10 +309,13 @@ class ZoomableVideoWidget(QWidget):
             text_width = min(max(font_metrics.horizontalAdvance(display_text) + 40, 250), 500)
             text_height = max(font_metrics.boundingRect(0, 0, text_width - 20, 0, 
                 Qt.TextFlag.TextWordWrap, display_text).height() + 30, 60)
-            desc_rect = QRect(hitbox_x, hitbox_y + hitbox_h + 15, text_width, text_height)
+            anchor_x = start_rect.x() if step.action_type == "mouse_drag" else hitbox_x
+            anchor_y = start_rect.y() if step.action_type == "mouse_drag" else hitbox_y
+            anchor_h = start_rect.height() if step.action_type == "mouse_drag" else hitbox_h
+            desc_rect = QRect(anchor_x, anchor_y + anchor_h + 15, text_width, text_height)
             
             if desc_rect.bottom() > self.height():
-                desc_rect.moveBottom(hitbox_y - 15)
+                desc_rect.moveBottom(anchor_y - 15)
             if desc_rect.right() > self.width():
                 desc_rect.moveRight(self.width() - 20)
             
@@ -281,6 +337,26 @@ class ZoomableVideoWidget(QWidget):
             super().wheelEvent(event)
     
     def mousePressEvent(self, event):
+        if self.waiting_for_click and self.current_step and self.player:
+            button_map = {
+                Qt.MouseButton.LeftButton: 'left',
+                Qt.MouseButton.RightButton: 'right',
+                Qt.MouseButton.MiddleButton: 'middle',
+            }
+            clicked_button = button_map.get(event.button())
+            if clicked_button:
+                img_pos = self.screen_to_image(event.pos())
+                if self.current_step.action_type == "mouse_drag":
+                    handled = self.player.handle_drag_press(img_pos.x(), img_pos.y(), clicked_button)
+                    if handled:
+                        event.accept()
+                        return
+                else:
+                    handled = self.player.handle_click(img_pos.x(), img_pos.y(), clicked_button)
+                    if handled:
+                        event.accept()
+                        return
+
         if event.button() == Qt.MouseButton.MiddleButton:
             # Middle button for panning
             self.is_panning = True
@@ -288,30 +364,31 @@ class ZoomableVideoWidget(QWidget):
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
             event.accept()
             return
-        elif event.button() == Qt.MouseButton.LeftButton or event.button() == Qt.MouseButton.RightButton:
-            # Handle left/right click for hitbox
-            if self.waiting_for_click and self.current_step and self.player:
-                # Map Qt button to step button type
-                if event.button() == Qt.MouseButton.LeftButton:
-                    clicked_button = 'left'
-                elif event.button() == Qt.MouseButton.RightButton:
-                    clicked_button = 'right'
-                else:
-                    clicked_button = 'left'
-                
-                img_pos = self.screen_to_image(event.pos())
-                handled = self.player.handle_click(img_pos.x(), img_pos.y(), clicked_button)
-                if handled:
-                    event.accept()
-                    return
         super().mousePressEvent(event)
     
     def mouseMoveEvent(self, event):
+        if self.waiting_for_click and self.current_step and self.current_step.action_type == "mouse_drag" and self.player:
+            img_pos = self.screen_to_image(event.pos())
+            if self.player.handle_drag_move(img_pos.x(), img_pos.y()):
+                event.accept()
+                return
         if self.is_panning:
             self.pan_offset = event.pos() - self.pan_start
             self.update()
     
     def mouseReleaseEvent(self, event):
+        if self.waiting_for_click and self.current_step and self.current_step.action_type == "mouse_drag" and self.player:
+            button_map = {
+                Qt.MouseButton.LeftButton: 'left',
+                Qt.MouseButton.RightButton: 'right',
+                Qt.MouseButton.MiddleButton: 'middle',
+            }
+            released_button = button_map.get(event.button())
+            if released_button:
+                img_pos = self.screen_to_image(event.pos())
+                if self.player.handle_drag_release(img_pos.x(), img_pos.y(), released_button):
+                    event.accept()
+                    return
         if event.button() == Qt.MouseButton.MiddleButton:
             self.is_panning = False
             self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -500,6 +577,10 @@ class Player(QWidget):
         self.tutorial = tutorial
         self.current_step_index = 0
         self.waiting_for_click = False 
+        self.drag_in_progress = False
+        self.drag_button = None
+        self.drag_start_pos = None
+        self.drag_reached_distance = False
         
         # Enable keyboard focus for Player widget
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -624,8 +705,22 @@ class Player(QWidget):
         step = self.tutorial.steps[self.current_step_index]
         if step.sound_enabled:
             winsound.MessageBeep(winsound.MB_OK)
+        self._reset_drag_state()
         self._hide_keyboard_prompts()
         self.next_step()
+
+    def _reset_drag_state(self):
+        self.drag_in_progress = False
+        self.drag_button = None
+        self.drag_start_pos = None
+        self.drag_reached_distance = False
+        if hasattr(self, "video_widget") and self.video_widget:
+            self.video_widget.drag_preview_active = False
+            self.video_widget.drag_current_image_pos = None
+            self.video_widget.update()
+
+    def _is_mouse_drag_step(self, step) -> bool:
+        return step.action_type == "mouse_drag"
 
     def _center_widget(self, widget: QWidget, y_offset: int = 0):
         x = (self.width() - widget.width()) // 2
@@ -842,6 +937,7 @@ class Player(QWidget):
         if self.frame_counter >= pause_frame:
             print(f"PAUSING: frame_counter={self.frame_counter}, step={self.current_step_index}, type={step.action_type}")
             self.waiting_for_click = True
+            self._reset_drag_state()
             self.pause_audio()  # Pause audio when waiting for user
             
             if step.action_type == "keyboard":
@@ -961,6 +1057,17 @@ class Player(QWidget):
             return dx * dx + dy * dy <= 1.0
         return step.x <= x <= step.x + step.width and step.y <= y <= step.y + step.height
 
+    def _is_point_in_drag_target(self, step, x: int, y: int) -> bool:
+        drag_step = step.model_copy(
+            update={
+                "x": getattr(step, "drag_end_x", step.x),
+                "y": getattr(step, "drag_end_y", step.y),
+                "width": getattr(step, "drag_end_width", step.width),
+                "height": getattr(step, "drag_end_height", step.height),
+            }
+        )
+        return self._is_point_in_hitbox(drag_step, x, y)
+
     def handle_click(self, x, y, button="left"):
         if self.current_step_index >= len(self.tutorial.steps):
             self.close()
@@ -974,7 +1081,7 @@ class Player(QWidget):
 
         required_button = getattr(step, 'click_button', 'left')
         in_hitbox = self._is_point_in_hitbox(step, x, y)
-        button_matches = (button == required_button) or (required_button == 'left' and button == 'left')
+        button_matches = button == required_button
 
         print(
             f"  target=({step.x},{step.y},{step.width},{step.height}), "
@@ -983,9 +1090,56 @@ class Player(QWidget):
         )
 
         if in_hitbox and button_matches:
-            if step.sound_enabled:
-                winsound.MessageBeep(winsound.MB_OK)
-            self.next_step()
+            self._complete_current_step()
+            return True
+        return False
+
+    def handle_drag_press(self, x, y, button="left"):
+        if self.current_step_index >= len(self.tutorial.steps):
+            return False
+
+        step = self.tutorial.steps[self.current_step_index]
+        if not self.waiting_for_click or not self._is_mouse_drag_step(step):
+            return False
+
+        required_button = getattr(step, "drag_button", "left")
+        in_start = self._is_point_in_hitbox(step, x, y)
+        if button != required_button or not in_start:
+            return False
+
+        self.drag_in_progress = True
+        self.drag_button = button
+        self.drag_start_pos = QPoint(x, y)
+        self.drag_reached_distance = False
+        self.video_widget.drag_preview_active = True
+        self.video_widget.drag_current_image_pos = QPoint(x, y)
+        self.video_widget.update()
+        return True
+
+    def handle_drag_move(self, x, y):
+        if not self.drag_in_progress or self.drag_start_pos is None:
+            return False
+
+        self.video_widget.drag_current_image_pos = QPoint(x, y)
+        distance = math.hypot(x - self.drag_start_pos.x(), y - self.drag_start_pos.y())
+        step = self.tutorial.steps[self.current_step_index]
+        self.drag_reached_distance = distance >= getattr(step, "drag_min_distance", 30)
+        self.video_widget.update()
+        return True
+
+    def handle_drag_release(self, x, y, button="left"):
+        if not self.drag_in_progress:
+            return False
+
+        self.video_widget.drag_current_image_pos = QPoint(x, y)
+        step = self.tutorial.steps[self.current_step_index]
+        in_target = self._is_point_in_drag_target(step, x, y)
+        button_matches = button == getattr(step, "drag_button", "left")
+        completed = button_matches and self.drag_reached_distance and in_target
+        self._reset_drag_state()
+
+        if completed:
+            self._complete_current_step()
             return True
         return False
 
@@ -1000,6 +1154,7 @@ class Player(QWidget):
     def next_step(self):
         self.current_step_index += 1
         self.waiting_for_click = False
+        self._reset_drag_state()
         self._hide_keyboard_prompts()
         self.video_widget.set_overlay_state(None, False)
         
