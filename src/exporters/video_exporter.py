@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 from typing import Callable, Optional
 from ..model import Tutorial, Step
-from ..key_utils import display_key_name
+from ..key_utils import display_key_combo, display_key_name
 
 
 class VideoExporter:
@@ -108,7 +108,8 @@ class VideoExporter:
             cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 150, 0), 2)
             
             # Text
-            cv2.putText(frame, step.keyboard_input, (x + 10, y + 35),
+            display_text = display_key_combo(step.keyboard_input) if "+" in (step.keyboard_input or "") else step.keyboard_input
+            cv2.putText(frame, display_text, (x + 10, y + 35),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
         elif step.action_type == "mouse_drag":
             frame = self._draw_drag_overlay(frame, step)

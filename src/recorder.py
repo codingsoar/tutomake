@@ -599,6 +599,13 @@ class Recorder:
             return key_name
         return None
 
+    def _normalize_char_key_for_combo(self, char: str) -> str:
+        if not char:
+            return ""
+        if len(char) == 1 and 1 <= ord(char) <= 26:
+            return chr(ord('a') + ord(char) - 1)
+        return char.lower()
+
     def _insert_step_sorted(self, step: Step):
         insert_idx = 0
         for i, existing_step in enumerate(self.tutorial.steps):
@@ -640,9 +647,10 @@ class Recorder:
 
                 modifier_keys = self._current_modifier_list()
                 if modifier_keys:
+                    combo_char = self._normalize_char_key_for_combo(char)
                     if self.key_buffer:
                         self._save_keyboard_step()
-                    self._save_key_combo_step(char, modifier_keys)
+                    self._save_key_combo_step(combo_char, modifier_keys)
                     return
                 
                 # Start buffer timing if this is the first key

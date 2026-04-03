@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QApplication
 
 from src.exporters.package_exporter import PackageExporter
 from src.exporters.web_exporter import WebExporter
+from src.key_utils import display_key_combo, normalize_key_combo
 from src.model import Step, Tutorial
 from src.recorder import Recorder
 from src.ui.editor import Editor
@@ -123,6 +124,10 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(tutorial.steps[0].keyboard_input, "ctrl+z")
         self.assertEqual(tutorial.steps[0].keyboard_mode, "key")
         self.assertEqual(tutorial.steps[0].description, "Press Ctrl + Z")
+
+    def test_key_combo_normalizes_control_character_to_letter(self):
+        self.assertEqual(normalize_key_combo("ctrl+\x1a"), "ctrl+z")
+        self.assertEqual(display_key_combo("ctrl+\x1a"), "Ctrl + Z")
 
     def test_recorder_keeps_audio_path_when_audio_saved_separately(self):
         tmpdir = self.make_tempdir()

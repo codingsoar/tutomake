@@ -653,16 +653,17 @@ class WebExporter:
             const required = step.modifier_keys || [];
             return required.every(key => pressedModifierKeys.has(key));
         }}
-        
-        function showKeyboardModal(step) {{
-            keyboardModal.classList.add('active');
-            modalInput.value = '';
-            modalInput.className = 'modal-input';
-            document.onkeydown = null;
-            let expectedInput = step.keyboard_input.toLowerCase().trim();
-            if (expectedInput.startsWith('key.')) expectedInput = expectedInput.substring(4);
-            
-            const keyAliases = {{
+
+        function normalizeKeyName(value) {{
+            const input = (value || '').toLowerCase().trim();
+            if (input.length === 1) {{
+                const code = input.charCodeAt(0);
+                if (code >= 1 && code <= 26) {{
+                    return String.fromCharCode(96 + code);
+                }}
+            }}
+            if (input.startsWith('key.')) return normalizeKeyName(input.substring(4));
+            const aliases = {{
                 'escape': 'esc',
                 'return': 'enter',
                 'del': 'delete',
@@ -671,21 +672,171 @@ class WebExporter:
                 'arrowleft': 'left',
                 'arrowright': 'right',
                 'page_up': 'pageup',
-                'page_down': 'pagedown'
+                'page_down': 'pagedown',
+                'control': 'ctrl',
+                'meta': 'cmd',
+                ' ': 'space',
+                'spacebar': 'space'
             }};
-            expectedInput = keyAliases[expectedInput] || expectedInput;
+            return aliases[input] || input;
+        }}
+
+        function normalizeKeyCombo(value) {{
+            const parts = (value || '').split('+').map(part => normalizeKeyName(part)).filter(Boolean);
+            const modifierOrder = ['ctrl', 'shift', 'alt', 'cmd', 'space'];
+            const modifiers = [];
+            let mainKey = '';
+
+            for (const part of parts) {{
+                if (modifierOrder.includes(part)) {{
+                    if (!modifiers.includes(part)) modifiers.push(part);
+                }} else if (!mainKey) {{
+                    mainKey = part;
+                }}
+            }}
+
+            modifiers.sort((a, b) => modifierOrder.indexOf(a) - modifierOrder.indexOf(b));
+            if (mainKey) modifiers.push(mainKey);
+            return modifiers.join('+');
+        }}
+
+        function formatKeyPart(value) {{
+            const normalized = normalizeKeyName(value);
+            if (/^f\\d+$/.test(normalized)) return normalized.toUpperCase();
+            if (/^[a-z]$/.test(normalized)) return normalized.toUpperCase();
+            return normalized.replace(/\\b\\w/g, ch => ch.toUpperCase());
+        }}
+
+        function formatKeyCombo(value) {{
+            const normalized = normalizeKeyCombo(value);
+            if (!normalized) return '';
+            return normalized.split('+').map(formatKeyPart).join(' + ');
+        }}
+
+        function eventMatchesExpectedInput(e, expectedInput) {{
+            const normalizedExpected = normalizeKeyCombo(expectedInput);
+            if (!normalizedExpected.includes('+')) {{
+                return normalizeKeyName(e.key) === normalizedExpected;
+            }}
+
+            const parts = normalizedExpected.split('+');
+            const expectedMain = parts[parts.length - 1];
+            const requiredModifiers = new Set(parts.slice(0, -1));
+            const activeModifiers = new Set([
+                e.ctrlKey ? 'ctrl' : '',
+                e.shiftKey ? 'shift' : '',
+                e.altKey ? 'alt' : '',
+                e.metaKey ? 'cmd' : '',
+                e.key === ' ' ? 'space' : ''
+            ].filter(Boolean));
+
+            return normalizeKeyName(e.key) === expectedMain &&
+                Array.from(requiredModifiers).every(key => activeModifiers.has(key));
+        }}
+
+        function normalizeKeyName(value) {{
+            const input = (value || '').toLowerCase().trim();
+            if (input.length === 1) {{
+                const code = input.charCodeAt(0);
+                if (code >= 1 && code <= 26) {{
+                    return String.fromCharCode(96 + code);
+                }}
+            }}
+            if (input.startsWith('key.')) return normalizeKeyName(input.substring(4));
+            const aliases = {{
+                'escape': 'esc',
+                'return': 'enter',
+                'del': 'delete',
+                'arrowup': 'up',
+                'arrowdown': 'down',
+                'arrowleft': 'left',
+                'arrowright': 'right',
+                'page_up': 'pageup',
+                'page_down': 'pagedown',
+                'control': 'ctrl',
+                'meta': 'cmd',
+                ' ': 'space',
+                'spacebar': 'space'
+            }};
+            return aliases[input] || input;
+        }}
+
+        function normalizeKeyCombo(value) {{
+            const parts = (value || '').split('+').map(part => normalizeKeyName(part)).filter(Boolean);
+            const modifierOrder = ['ctrl', 'shift', 'alt', 'cmd', 'space'];
+            const modifiers = [];
+            let mainKey = '';
+
+            for (const part of parts) {{
+                if (modifierOrder.includes(part)) {{
+                    if (!modifiers.includes(part)) modifiers.push(part);
+                }} else if (!mainKey) {{
+                    mainKey = part;
+                }}
+            }}
+
+            modifiers.sort((a, b) => modifierOrder.indexOf(a) - modifierOrder.indexOf(b));
+            if (mainKey) modifiers.push(mainKey);
+            return modifiers.join('+');
+        }}
+
+        function formatKeyPart(value) {{
+            const normalized = normalizeKeyName(value);
+            if (/^f\\d+$/.test(normalized)) return normalized.toUpperCase();
+            if (/^[a-z]$/.test(normalized)) return normalized.toUpperCase();
+            return normalized.replace(/\\b\\w/g, ch => ch.toUpperCase());
+        }}
+
+        function formatKeyCombo(value) {{
+            const normalized = normalizeKeyCombo(value);
+            if (!normalized) return '';
+            return normalized.split('+').map(formatKeyPart).join(' + ');
+        }}
+
+        function eventMatchesExpectedInput(e, expectedInput) {{
+            const normalizedExpected = normalizeKeyCombo(expectedInput);
+            if (!normalizedExpected.includes('+')) {{
+                return normalizeKeyName(e.key) === normalizedExpected;
+            }}
+
+            const parts = normalizedExpected.split('+');
+            const expectedMain = parts[parts.length - 1];
+            const requiredModifiers = new Set(parts.slice(0, -1));
+            const activeModifiers = new Set([
+                e.ctrlKey ? 'ctrl' : '',
+                e.shiftKey ? 'shift' : '',
+                e.altKey ? 'alt' : '',
+                e.metaKey ? 'cmd' : '',
+                e.key === ' ' ? 'space' : ''
+            ].filter(Boolean));
+
+            return normalizeKeyName(e.key) === expectedMain &&
+                Array.from(requiredModifiers).every(key => activeModifiers.has(key));
+        }}
+        
+        function showKeyboardModal(step) {{
+            keyboardModal.classList.add('active');
+            modalInput.value = '';
+            modalInput.className = 'modal-input';
+            document.onkeydown = null;
+            let expectedInput = normalizeKeyCombo(step.keyboard_input);
             
             const specialKeys = ['delete', 'backspace', 'tab', 'esc', 'enter', 'space',
                 'up', 'down', 'left', 'right', 'home', 'end', 'pageup', 'pagedown',
                 'insert', 'capslock', 'numlock', 'scrolllock', 'pause', 'printscreen',
                 'ctrl', 'alt', 'shift', 'cmd'];
-            const isFkey = expectedInput.startsWith('f') && expectedInput.length > 1 && !isNaN(expectedInput.substring(1));
-            const inferredSpecial = specialKeys.includes(expectedInput) || isFkey;
+            const comboParts = expectedInput.split('+').filter(Boolean);
+            const comboMainKey = comboParts.length ? comboParts[comboParts.length - 1] : '';
+            const isFkey = comboMainKey.startsWith('f') && comboMainKey.length > 1 && !isNaN(comboMainKey.substring(1));
+            const inferredSpecial = comboParts.length > 1 || specialKeys.includes(comboMainKey) || isFkey;
             const isSpecial = (step.keyboard_mode || '') === 'key' || inferredSpecial;
             const customInstruction = (step.instruction || '').trim();
             const defaultSpecialInstruction = isSpecial ? `${{expectedInput.toUpperCase()}} 키를 누르세요` : '';
             const modalMessage = customInstruction || defaultSpecialInstruction;
             modalTitle.textContent = modalMessage;
+            if (isSpecial) {{
+                modalTitle.textContent = customInstruction || `Press ${{formatKeyCombo(expectedInput)}}`;
+            }}
             modalTitle.style.display = modalMessage ? 'block' : 'none';
             modalHint.textContent = '';
             modalHint.style.display = 'none';
@@ -698,12 +849,21 @@ class WebExporter:
             }} else {{
                 modalInput.style.display = 'block';
                 modalInputWrap.style.display = 'block';
-                modalInputGhost.textContent = step.keyboard_input;
+                modalInputGhost.textContent = formatKeyCombo(step.keyboard_input);
                 modalInputGhost.style.display = 'flex';
                 modalInput.focus();
             }}
             
             document.onkeydown = function(e) {{
+                if (isSpecial && eventMatchesExpectedInput(e, expectedInput)) {{
+                    e.preventDefault();
+                    modalInput.className = 'modal-input success';
+                    setTimeout(() => {{
+                        hideKeyboardModal();
+                        nextStep();
+                    }}, 200);
+                    return;
+                }}
                 let keyName = e.key.toLowerCase();
                 
                 if (e.key === 'Delete') keyName = 'delete';
@@ -724,7 +884,7 @@ class WebExporter:
                 else if (e.key.startsWith('F') && e.key.length > 1) keyName = e.key.toLowerCase();
 
                 if (isSpecial) {{
-                    if (keyName === expectedInput) {{
+                    if (eventMatchesExpectedInput(e, expectedInput)) {{
                         e.preventDefault();
                         modalInput.className = 'modal-input success';
                         setTimeout(() => {{
@@ -1600,33 +1760,24 @@ class WebExporter:
         function showKeyboardModal(step) {{
             keyboardModal.classList.add('active');
             document.onkeydown = null;
-            let expectedInput = step.keyboard_input.toLowerCase().trim();
-            if (expectedInput.startsWith('key.')) expectedInput = expectedInput.substring(4);
-            
-            const keyAliases = {{
-                'escape': 'esc',
-                'return': 'enter',
-                'del': 'delete',
-                'arrowup': 'up',
-                'arrowdown': 'down',
-                'arrowleft': 'left',
-                'arrowright': 'right',
-                'page_up': 'pageup',
-                'page_down': 'pagedown'
-            }};
-            expectedInput = keyAliases[expectedInput] || expectedInput;
+            let expectedInput = normalizeKeyCombo(step.keyboard_input);
             
             const specialKeys = ['delete', 'backspace', 'tab', 'esc', 'enter',
                                'space', 'up', 'down', 'left', 'right', 'home', 'end', 'pageup', 'pagedown',
                                'insert', 'ctrl', 'alt', 'shift', 'cmd', 'capslock', 'numlock',
                                'scrolllock', 'pause', 'printscreen'];
-            const isFkey = expectedInput.startsWith('f') && expectedInput.length >= 2 && !isNaN(expectedInput.substring(1));
-            const inferredSpecial = specialKeys.includes(expectedInput) || isFkey;
+            const comboParts = expectedInput.split('+').filter(Boolean);
+            const comboMainKey = comboParts.length ? comboParts[comboParts.length - 1] : '';
+            const isFkey = comboMainKey.startsWith('f') && comboMainKey.length >= 2 && !isNaN(comboMainKey.substring(1));
+            const inferredSpecial = comboParts.length > 1 || specialKeys.includes(comboMainKey) || isFkey;
             const isSpecial = (step.keyboard_mode || '') === 'key' || inferredSpecial;
             const customInstruction = (step.instruction || '').trim();
             const defaultSpecialInstruction = isSpecial ? `${{expectedInput.toUpperCase()}} 키를 누르세요` : '';
             const modalMessage = customInstruction || defaultSpecialInstruction;
             modalTitle.textContent = modalMessage;
+            if (isSpecial) {{
+                modalTitle.textContent = customInstruction || `Press ${{formatKeyCombo(expectedInput)}}`;
+            }}
             modalTitle.style.display = modalMessage ? 'block' : 'none';
             modalHint.textContent = '';
             modalHint.style.display = 'none';
@@ -1639,7 +1790,7 @@ class WebExporter:
             }} else {{
                 modalInput.style.display = 'block';
                 modalInputWrap.style.display = 'block';
-                modalInputGhost.textContent = step.keyboard_input;
+                modalInputGhost.textContent = formatKeyCombo(step.keyboard_input);
                 modalInputGhost.style.display = 'flex';
                 modalInput.focus();
             }}
@@ -1648,6 +1799,13 @@ class WebExporter:
             modalInput.className = 'modal-input';
             
             document.onkeydown = function(e) {{
+                if (isSpecial && eventMatchesExpectedInput(e, expectedInput)) {{
+                    e.preventDefault();
+                    modalInput.className = 'modal-input success';
+                    document.onkeydown = null;
+                    setTimeout(function() {{ hideKeyboardModal(); nextStep(); }}, 200);
+                    return false;
+                }}
                 let keyName = e.key.toLowerCase();
                 if (e.key === 'Delete') keyName = 'delete';
                 else if (e.key === 'Backspace') keyName = 'backspace';
@@ -1666,7 +1824,7 @@ class WebExporter:
                 else if (e.key === 'Insert') keyName = 'insert';
                 else if (e.key.startsWith('F') && e.key.length > 1) keyName = e.key.toLowerCase();
                 
-                if (isSpecial && keyName === expectedInput) {{
+                if (isSpecial && eventMatchesExpectedInput(e, expectedInput)) {{
                     e.preventDefault();
                     modalInput.className = 'modal-input success';
                     document.onkeydown = null;

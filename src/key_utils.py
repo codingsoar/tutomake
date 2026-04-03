@@ -83,6 +83,8 @@ def normalize_key_name(value: str) -> str:
         return ""
 
     normalized = value.strip().lower()
+    if len(normalized) == 1 and 1 <= ord(normalized) <= 26:
+        normalized = chr(ord("a") + ord(normalized) - 1)
     if normalized.startswith("key."):
         normalized = normalized[4:]
 

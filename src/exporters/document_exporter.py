@@ -5,6 +5,7 @@ Exports tutorials to PDF, PowerPoint, Markdown, PNG sequence formats
 import os
 from typing import Callable, Optional
 from ..model import Tutorial, Step
+from ..key_utils import display_key_combo
 
 
 class DocumentExporter:
@@ -70,7 +71,8 @@ class DocumentExporter:
         if step.action_type == "keyboard":
             x, y = step.x, step.y
             cv2.rectangle(img, (x, y), (x + 300, y + 50), (255, 150, 0), 2)
-            cv2.putText(img, step.keyboard_input, (x + 10, y + 35),
+            display_text = display_key_combo(step.keyboard_input) if "+" in (step.keyboard_input or "") else step.keyboard_input
+            cv2.putText(img, display_text, (x + 10, y + 35),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
         else:
             x, y, w, h = step.x, step.y, step.width, step.height
@@ -184,7 +186,8 @@ class DocumentExporter:
                     lines.append("")
             
             if step.action_type == "keyboard":
-                lines.append(f"**Type:** `{step.keyboard_input}`")
+                display_text = display_key_combo(step.keyboard_input) if "+" in (step.keyboard_input or "") else step.keyboard_input
+                lines.append(f"**Type:** `{display_text}`")
             else:
                 lines.append(f"**Action:** Click at ({step.x}, {step.y})")
             
@@ -260,7 +263,8 @@ class DocumentExporter:
             pdf.ln(5)
             pdf.set_font('Arial', '', 12)
             if step.action_type == "keyboard":
-                pdf.cell(0, 10, f"Action: Type '{step.keyboard_input}'", ln=True)
+                display_text = display_key_combo(step.keyboard_input) if "+" in (step.keyboard_input or "") else step.keyboard_input
+                pdf.cell(0, 10, f"Action: Type '{display_text}'", ln=True)
             else:
                 pdf.cell(0, 10, f"Action: Click at position ({step.x}, {step.y})", ln=True)
             
