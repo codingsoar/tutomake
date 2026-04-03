@@ -649,6 +649,12 @@ class WebExporter:
             return '';
         }}
 
+        function eventKeyName(e) {{
+            if ((e.code || '') === 'Space') return 'space';
+            const rawKey = e.key === 'Spacebar' ? 'space' : e.key;
+            return normalizeKeyName(rawKey);
+        }}
+
         function requiredModifiersMatch(step) {{
             const required = step.modifier_keys || [];
             return required.every(key => pressedModifierKeys.has(key));
@@ -724,7 +730,7 @@ class WebExporter:
         function eventMatchesExpectedInput(e, expectedInput) {{
             const normalizedExpected = normalizeKeyCombo(expectedInput);
             if (!normalizedExpected.includes('+')) {{
-                return normalizeKeyName(e.key) === normalizedExpected;
+                return eventKeyName(e) === normalizedExpected;
             }}
 
             const parts = normalizedExpected.split('+');
@@ -735,16 +741,18 @@ class WebExporter:
                 e.shiftKey ? 'shift' : '',
                 e.altKey ? 'alt' : '',
                 e.metaKey ? 'cmd' : '',
-                e.key === ' ' ? 'space' : ''
+                eventKeyName(e) === 'space' ? 'space' : ''
             ].filter(Boolean));
 
-            return normalizeKeyName(e.key) === expectedMain &&
+            return eventKeyName(e) === expectedMain &&
                 requiredModifiers.size === activeModifiers.size &&
                 Array.from(requiredModifiers).every(key => activeModifiers.has(key));
         }}
 
         function showKeyboardModal(step) {{
             keyboardModal.classList.add('active');
+            keyboardModal.tabIndex = -1;
+            keyboardModal.focus();
             modalInput.value = '';
             modalInput.className = 'modal-input';
             document.onkeydown = null;
@@ -1647,9 +1655,104 @@ class WebExporter:
             return '';
         }}
 
+        function eventKeyName(e) {{
+            if ((e.code || '') === 'Space') return 'space';
+            const rawKey = e.key === 'Spacebar' ? 'space' : e.key;
+            return normalizeKeyName(rawKey);
+        }}
+
         function requiredModifiersMatch(step) {{
             const required = step.modifier_keys || [];
             return required.every(key => pressedModifierKeys.has(key));
+        }}
+
+        function normalizeKeyName(value) {{
+            const input = (value || '').toLowerCase().trim();
+            if (input.length === 1) {{
+                const code = input.charCodeAt(0);
+                if (code >= 1 && code <= 26) {{
+                    return String.fromCharCode(96 + code);
+                }}
+            }}
+            if (input.startsWith('key.')) return normalizeKeyName(input.substring(4));
+            const aliases = {{
+                'escape': 'esc',
+                'return': 'enter',
+                'del': 'delete',
+                'arrowup': 'up',
+                'arrowdown': 'down',
+                'arrowleft': 'left',
+                'arrowright': 'right',
+                'page_up': 'pageup',
+                'page_down': 'pagedown',
+                'control': 'ctrl',
+                'meta': 'cmd',
+                ' ': 'space',
+                'spacebar': 'space'
+            }};
+            return aliases[input] || input;
+        }}
+
+        function normalizeKeyCombo(value) {{
+            const parts = (value || '').split('+').map(part => normalizeKeyName(part)).filter(Boolean);
+            const modifierOrder = ['ctrl', 'shift', 'alt', 'cmd', 'space'];
+            const modifiers = [];
+            let mainKey = '';
+
+            for (const part of parts) {{
+                if (modifierOrder.includes(part)) {{
+                    if (!modifiers.includes(part)) modifiers.push(part);
+                }} else if (!mainKey) {{
+                    mainKey = part;
+                }}
+            }}
+
+            modifiers.sort((a, b) => modifierOrder.indexOf(a) - modifierOrder.indexOf(b));
+            if (mainKey) modifiers.push(mainKey);
+            return modifiers.join('+');
+        }}
+
+        function formatKeyPart(value) {{
+            const normalized = normalizeKeyName(value);
+            if (/^f\\d+$/.test(normalized)) return normalized.toUpperCase();
+            if (/^[a-z]$/.test(normalized)) return normalized.toUpperCase();
+            return normalized.replace(/\\b\\w/g, ch => ch.toUpperCase());
+        }}
+
+        function formatKeyCombo(value) {{
+            const normalized = normalizeKeyCombo(value);
+            if (!normalized) return '';
+            return normalized.split('+').map(formatKeyPart).join(' + ');
+        }}
+
+        function normalizeTextInput(value) {{
+            return (value || '')
+                .trim()
+                .toLowerCase()
+                .replace(/\\s*,\\s*/g, ',')
+                .replace(/\\s+/g, ' ');
+        }}
+
+        function eventMatchesExpectedInput(e, expectedInput) {{
+            const normalizedExpected = normalizeKeyCombo(expectedInput);
+            if (!normalizedExpected.includes('+')) {{
+                return eventKeyName(e) === normalizedExpected;
+            }}
+
+            const parts = normalizedExpected.split('+');
+            const expectedMain = parts[parts.length - 1];
+            const requiredModifiers = new Set(parts.slice(0, -1));
+            const activeModifiers = new Set([
+                e.ctrlKey ? 'ctrl' : '',
+                e.shiftKey ? 'shift' : '',
+                e.altKey ? 'alt' : '',
+                e.metaKey ? 'cmd' : '',
+                eventKeyName(e) === 'space' ? 'space' : ''
+            ].filter(Boolean));
+
+            return eventKeyName(e) === expectedMain &&
+                requiredModifiers.size === activeModifiers.size &&
+                Array.from(requiredModifiers).every(key => activeModifiers.has(key));
         }}
         
         hitbox.addEventListener('click', function() {{
@@ -1689,6 +1792,8 @@ class WebExporter:
         
         function showKeyboardModal(step) {{
             keyboardModal.classList.add('active');
+            keyboardModal.tabIndex = -1;
+            keyboardModal.focus();
             document.onkeydown = null;
             let expectedInput = normalizeKeyCombo(step.keyboard_input);
             const expectedText = normalizeTextInput(step.keyboard_input);
