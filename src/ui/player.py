@@ -732,7 +732,7 @@ class Player(QWidget):
         required_modifiers = {part for part in parts[:-1] if part in {"ctrl", "shift", "alt", "cmd", "space"}}
         expected_main = parts[-1]
         actual_main = self._event_main_key_name(event)
-        return actual_main == expected_main and required_modifiers.issubset(self.pressed_modifier_keys)
+        return actual_main == expected_main and required_modifiers == self.pressed_modifier_keys
 
     def _required_modifiers_match(self, step) -> bool:
         required_modifiers = set(getattr(step, "modifier_keys", []) or [])

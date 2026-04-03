@@ -89,6 +89,8 @@ class Recorder:
         self.middle_press_modifier_keys: list[str] = []
         self.middle_drag_threshold = 30
         self.current_modifier_keys: set[str] = set()
+        self.space_modifier_pending = False
+        self.space_modifier_used = False
 
     def start(self):
         if self.is_recording:
@@ -411,6 +413,7 @@ class Recorder:
                 self.middle_last_pos = (x, y)
                 self.middle_press_timestamp = current_video_time
                 self.middle_press_modifier_keys = self._current_modifier_list()
+                self._mark_modifier_keys_used(self.middle_press_modifier_keys)
             else:
                 press_pos = self.middle_press_pos
                 last_pos = self.middle_last_pos or (x, y)
@@ -442,6 +445,7 @@ class Recorder:
 
         # We can still capture a screenshot for the thumbnail/list view
         modifier_keys = self._current_modifier_list()
+        self._mark_modifier_keys_used(modifier_keys)
         threading.Thread(target=self._capture_step, args=(x, y, current_video_time, button_name, modifier_keys)).start()
 
     def _capture_monitor_screenshot(self, x, y, action_label="Click"):
@@ -593,6 +597,10 @@ class Recorder:
         order = ["ctrl", "shift", "alt", "cmd", "space"]
         return [key for key in order if key in self.current_modifier_keys]
 
+    def _mark_modifier_keys_used(self, modifier_keys):
+        if "space" in (modifier_keys or []):
+            self.space_modifier_used = True
+
     def _modifier_from_key(self, key):
         key_name = normalize_key_name(getattr(key, "name", "") or "")
         if key_name in {"ctrl", "shift", "alt", "cmd"}:
@@ -625,6 +633,8 @@ class Recorder:
             return
         if key == keyboard.Key.space and not self.key_buffer:
             self.current_modifier_keys.add("space")
+            self.space_modifier_pending = True
+            self.space_modifier_used = False
             return
             
         try:
@@ -650,6 +660,7 @@ class Recorder:
                     combo_char = self._normalize_char_key_for_combo(char)
                     if self.key_buffer:
                         self._save_keyboard_step()
+                    self._mark_modifier_keys_used(modifier_keys)
                     self._save_key_combo_step(combo_char, modifier_keys)
                     return
                 
@@ -681,6 +692,7 @@ class Recorder:
                 if modifier_keys:
                     if self.key_buffer:
                         self._save_keyboard_step()
+                    self._mark_modifier_keys_used(modifier_keys)
                     self._save_key_combo_step("delete", modifier_keys)
                     return
                 if self.key_buffer:
@@ -691,6 +703,7 @@ class Recorder:
                 if modifier_keys:
                     if self.key_buffer:
                         self._save_keyboard_step()
+                    self._mark_modifier_keys_used(modifier_keys)
                     self._save_key_combo_step("tab", modifier_keys)
                     return
                 if self.key_buffer:
@@ -701,6 +714,7 @@ class Recorder:
                 if modifier_keys:
                     if self.key_buffer:
                         self._save_keyboard_step()
+                    self._mark_modifier_keys_used(modifier_keys)
                     self._save_key_combo_step("esc", modifier_keys)
                     return
                 if self.key_buffer:
@@ -714,6 +728,7 @@ class Recorder:
                     if modifier_keys:
                         if self.key_buffer:
                             self._save_keyboard_step()
+                        self._mark_modifier_keys_used(modifier_keys)
                         self._save_key_combo_step(key_name, modifier_keys)
                         return
                     if self.key_buffer:
@@ -724,6 +739,7 @@ class Recorder:
                     if modifier_keys:
                         if self.key_buffer:
                             self._save_keyboard_step()
+                        self._mark_modifier_keys_used(modifier_keys)
                         self._save_key_combo_step(key_name, modifier_keys)
                         return
                     if self.key_buffer:
@@ -738,7 +754,20 @@ class Recorder:
         if modifier_key:
             self.current_modifier_keys.discard(modifier_key)
         elif key == keyboard.Key.space:
+            should_emit_space = (
+                self.space_modifier_pending
+                and not self.space_modifier_used
+                and not self.key_buffer
+            )
+            combo_modifiers = [name for name in self._current_modifier_list() if name != "space"]
             self.current_modifier_keys.discard("space")
+            self.space_modifier_pending = False
+            self.space_modifier_used = False
+            if should_emit_space:
+                if combo_modifiers:
+                    self._save_key_combo_step("space", combo_modifiers)
+                else:
+                    self._save_special_key_step("space")
     
     def _get_current_video_time(self):
         """Get current video timestamp based on frame count."""

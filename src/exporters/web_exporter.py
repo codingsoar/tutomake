@@ -713,84 +713,12 @@ class WebExporter:
             return normalized.split('+').map(formatKeyPart).join(' + ');
         }}
 
-        function eventMatchesExpectedInput(e, expectedInput) {{
-            const normalizedExpected = normalizeKeyCombo(expectedInput);
-            if (!normalizedExpected.includes('+')) {{
-                return normalizeKeyName(e.key) === normalizedExpected;
-            }}
-
-            const parts = normalizedExpected.split('+');
-            const expectedMain = parts[parts.length - 1];
-            const requiredModifiers = new Set(parts.slice(0, -1));
-            const activeModifiers = new Set([
-                e.ctrlKey ? 'ctrl' : '',
-                e.shiftKey ? 'shift' : '',
-                e.altKey ? 'alt' : '',
-                e.metaKey ? 'cmd' : '',
-                e.key === ' ' ? 'space' : ''
-            ].filter(Boolean));
-
-            return normalizeKeyName(e.key) === expectedMain &&
-                Array.from(requiredModifiers).every(key => activeModifiers.has(key));
-        }}
-
-        function normalizeKeyName(value) {{
-            const input = (value || '').toLowerCase().trim();
-            if (input.length === 1) {{
-                const code = input.charCodeAt(0);
-                if (code >= 1 && code <= 26) {{
-                    return String.fromCharCode(96 + code);
-                }}
-            }}
-            if (input.startsWith('key.')) return normalizeKeyName(input.substring(4));
-            const aliases = {{
-                'escape': 'esc',
-                'return': 'enter',
-                'del': 'delete',
-                'arrowup': 'up',
-                'arrowdown': 'down',
-                'arrowleft': 'left',
-                'arrowright': 'right',
-                'page_up': 'pageup',
-                'page_down': 'pagedown',
-                'control': 'ctrl',
-                'meta': 'cmd',
-                ' ': 'space',
-                'spacebar': 'space'
-            }};
-            return aliases[input] || input;
-        }}
-
-        function normalizeKeyCombo(value) {{
-            const parts = (value || '').split('+').map(part => normalizeKeyName(part)).filter(Boolean);
-            const modifierOrder = ['ctrl', 'shift', 'alt', 'cmd', 'space'];
-            const modifiers = [];
-            let mainKey = '';
-
-            for (const part of parts) {{
-                if (modifierOrder.includes(part)) {{
-                    if (!modifiers.includes(part)) modifiers.push(part);
-                }} else if (!mainKey) {{
-                    mainKey = part;
-                }}
-            }}
-
-            modifiers.sort((a, b) => modifierOrder.indexOf(a) - modifierOrder.indexOf(b));
-            if (mainKey) modifiers.push(mainKey);
-            return modifiers.join('+');
-        }}
-
-        function formatKeyPart(value) {{
-            const normalized = normalizeKeyName(value);
-            if (/^f\\d+$/.test(normalized)) return normalized.toUpperCase();
-            if (/^[a-z]$/.test(normalized)) return normalized.toUpperCase();
-            return normalized.replace(/\\b\\w/g, ch => ch.toUpperCase());
-        }}
-
-        function formatKeyCombo(value) {{
-            const normalized = normalizeKeyCombo(value);
-            if (!normalized) return '';
-            return normalized.split('+').map(formatKeyPart).join(' + ');
+        function normalizeTextInput(value) {{
+            return (value || '')
+                .trim()
+                .toLowerCase()
+                .replace(/\\s*,\\s*/g, ',')
+                .replace(/\\s+/g, ' ');
         }}
 
         function eventMatchesExpectedInput(e, expectedInput) {{
@@ -811,15 +739,17 @@ class WebExporter:
             ].filter(Boolean));
 
             return normalizeKeyName(e.key) === expectedMain &&
+                requiredModifiers.size === activeModifiers.size &&
                 Array.from(requiredModifiers).every(key => activeModifiers.has(key));
         }}
-        
+
         function showKeyboardModal(step) {{
             keyboardModal.classList.add('active');
             modalInput.value = '';
             modalInput.className = 'modal-input';
             document.onkeydown = null;
             let expectedInput = normalizeKeyCombo(step.keyboard_input);
+            const expectedText = normalizeTextInput(step.keyboard_input);
             
             const specialKeys = ['delete', 'backspace', 'tab', 'esc', 'enter', 'space',
                 'up', 'down', 'left', 'right', 'home', 'end', 'pageup', 'pagedown',
@@ -849,7 +779,7 @@ class WebExporter:
             }} else {{
                 modalInput.style.display = 'block';
                 modalInputWrap.style.display = 'block';
-                modalInputGhost.textContent = formatKeyCombo(step.keyboard_input);
+                modalInputGhost.textContent = step.keyboard_input || '';
                 modalInputGhost.style.display = 'flex';
                 modalInput.focus();
             }}
@@ -897,7 +827,7 @@ class WebExporter:
                 
                 if (e.key === 'Enter' || e.key === ' ') {{
                     e.preventDefault();
-                    if (modalInput.value === step.keyboard_input) {{
+                    if (normalizeTextInput(modalInput.value) === expectedText) {{
                         modalInput.className = 'modal-input success';
                         document.onkeydown = null;
                         setTimeout(() => {{
@@ -1761,6 +1691,7 @@ class WebExporter:
             keyboardModal.classList.add('active');
             document.onkeydown = null;
             let expectedInput = normalizeKeyCombo(step.keyboard_input);
+            const expectedText = normalizeTextInput(step.keyboard_input);
             
             const specialKeys = ['delete', 'backspace', 'tab', 'esc', 'enter',
                                'space', 'up', 'down', 'left', 'right', 'home', 'end', 'pageup', 'pagedown',
@@ -1790,7 +1721,7 @@ class WebExporter:
             }} else {{
                 modalInput.style.display = 'block';
                 modalInputWrap.style.display = 'block';
-                modalInputGhost.textContent = formatKeyCombo(step.keyboard_input);
+                modalInputGhost.textContent = step.keyboard_input || '';
                 modalInputGhost.style.display = 'flex';
                 modalInput.focus();
             }}
@@ -1834,7 +1765,7 @@ class WebExporter:
                 
                 // For text input, check on Enter or Space
                 if (!isSpecial && (keyName === 'enter' || keyName === 'space')) {{
-                    if (modalInput.value.toLowerCase() === expectedInput) {{
+                    if (normalizeTextInput(modalInput.value) === expectedText) {{
                         modalInput.className = 'modal-input success';
                         document.onkeydown = null;
                         setTimeout(function() {{ hideKeyboardModal(); nextStep(); }}, 300);

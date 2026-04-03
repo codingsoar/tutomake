@@ -129,6 +129,44 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(normalize_key_combo("ctrl+\x1a"), "ctrl+z")
         self.assertEqual(display_key_combo("ctrl+\x1a"), "Ctrl + Z")
 
+    def test_recorder_records_space_as_special_key_step(self):
+        tmpdir = self.make_tempdir()
+        self.addCleanup(self.cleanup_tempdir, tmpdir)
+        tutorial = Tutorial()
+        recorder = Recorder(tutorial, str(tmpdir))
+        recorder.is_recording = True
+        recorder.start_time = 0.0
+        recorder.frame_count = 24
+        recorder.fps = 24.0
+
+        recorder._on_key_press(keyboard.Key.space)
+        recorder._on_key_release(keyboard.Key.space)
+
+        self.assertEqual(len(tutorial.steps), 1)
+        self.assertEqual(tutorial.steps[0].keyboard_input, "space")
+        self.assertEqual(tutorial.steps[0].keyboard_mode, "key")
+
+    def test_recorder_records_ctrl_space_as_key_combo(self):
+        tmpdir = self.make_tempdir()
+        self.addCleanup(self.cleanup_tempdir, tmpdir)
+        tutorial = Tutorial()
+        recorder = Recorder(tutorial, str(tmpdir))
+        recorder.is_recording = True
+        recorder.start_time = 0.0
+        recorder.frame_count = 24
+        recorder.fps = 24.0
+
+        ctrl_key = type("CtrlKey", (), {"name": "ctrl_l"})()
+        recorder._on_key_press(ctrl_key)
+        recorder._on_key_press(keyboard.Key.space)
+        recorder._on_key_release(keyboard.Key.space)
+        recorder._on_key_release(ctrl_key)
+
+        self.assertEqual(len(tutorial.steps), 1)
+        self.assertEqual(tutorial.steps[0].keyboard_input, "ctrl+space")
+        self.assertEqual(tutorial.steps[0].keyboard_mode, "key")
+        self.assertEqual(tutorial.steps[0].description, "Press Ctrl + Space")
+
     def test_recorder_keeps_audio_path_when_audio_saved_separately(self):
         tmpdir = self.make_tempdir()
         self.addCleanup(self.cleanup_tempdir, tmpdir)
