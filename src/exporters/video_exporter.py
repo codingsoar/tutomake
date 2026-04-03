@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 from typing import Callable, Optional
 from ..model import Tutorial, Step
+from ..key_utils import display_key_name
 
 
 class VideoExporter:
@@ -159,6 +160,15 @@ class VideoExporter:
         text_w = min(max(len(label) * 11, 260), 700)
         cv2.rectangle(frame, (text_x, text_y - 30), (text_x + text_w, text_y + 8), (0, 0, 0), -1)
         cv2.putText(frame, label, (text_x + 12, text_y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
+        modifier_keys = getattr(step, "modifier_keys", []) or []
+        if modifier_keys:
+            modifier_text = " + ".join(display_key_name(key) for key in modifier_keys)
+            badge_x = start_x
+            badge_y = max(36, start_y - 18)
+            badge_w = max(120, len(modifier_text) * 12 + 24)
+            cv2.rectangle(frame, (badge_x, badge_y - 28), (badge_x + badge_w, badge_y + 4), (15, 23, 42), -1)
+            cv2.putText(frame, modifier_text, (badge_x + 10, badge_y - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (226, 232, 240), 2)
 
         return frame
     

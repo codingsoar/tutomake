@@ -104,6 +104,26 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(tutorial.steps[1].keyboard_input, "tab")
         self.assertEqual(tutorial.steps[1].keyboard_mode, "key")
 
+    def test_recorder_records_modifier_key_combo_as_key_step(self):
+        tmpdir = self.make_tempdir()
+        self.addCleanup(self.cleanup_tempdir, tmpdir)
+        tutorial = Tutorial()
+        recorder = Recorder(tutorial, str(tmpdir))
+        recorder.is_recording = True
+        recorder.start_time = 0.0
+        recorder.frame_count = 24
+        recorder.fps = 24.0
+
+        ctrl_key = type("CtrlKey", (), {"name": "ctrl_l"})()
+        recorder._on_key_press(ctrl_key)
+        recorder._on_key_press(DummyCharKey("z"))
+        recorder._on_key_release(ctrl_key)
+
+        self.assertEqual(len(tutorial.steps), 1)
+        self.assertEqual(tutorial.steps[0].keyboard_input, "ctrl+z")
+        self.assertEqual(tutorial.steps[0].keyboard_mode, "key")
+        self.assertEqual(tutorial.steps[0].description, "Press Ctrl + Z")
+
     def test_recorder_keeps_audio_path_when_audio_saved_separately(self):
         tmpdir = self.make_tempdir()
         self.addCleanup(self.cleanup_tempdir, tmpdir)

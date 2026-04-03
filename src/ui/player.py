@@ -8,7 +8,7 @@ import re
 import math
 import cv2
 import numpy as np
-from ..key_utils import display_key_name, is_special_key_name, normalize_key_name
+from ..key_utils import display_key_combo, display_key_name, is_special_key_name, normalize_key_combo, normalize_key_name
 from ..model import Tutorial
 
 
@@ -264,6 +264,17 @@ class ZoomableVideoWidget(QWidget):
                     current_pos = self.image_to_screen(self.drag_current_image_pos)
                     painter.setPen(QPen(QColor("#38BDF8"), max(2, line_width), Qt.PenStyle.DashLine))
                     painter.drawLine(start_center, current_pos)
+
+                modifier_keys = getattr(step, "modifier_keys", []) or []
+                if modifier_keys:
+                    modifier_text = " + ".join(display_key_name(key) for key in modifier_keys)
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.setBrush(QColor(15, 23, 42, 220))
+                    badge_width = max(120, painter.fontMetrics().horizontalAdvance(modifier_text) + 28)
+                    badge_rect = QRect(start_rect.x(), max(12, start_rect.y() - 44), badge_width, 32)
+                    painter.drawRoundedRect(badge_rect, 10, 10)
+                    painter.setPen(QColor("#E2E8F0"))
+                    painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, modifier_text)
             else:
                 # Scale hitbox coordinates
                 hitbox_x = int(step.x * self.scale + offset_x)
@@ -581,6 +592,7 @@ class Player(QWidget):
         self.drag_button = None
         self.drag_start_pos = None
         self.drag_reached_distance = False
+        self.pressed_modifier_keys = set()
         
         # Enable keyboard focus for Player widget
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -684,7 +696,10 @@ class Player(QWidget):
         return None
 
     def _expected_keyboard_input(self, step) -> str:
-        return normalize_key_name(step.keyboard_input or "")
+        raw_value = step.keyboard_input or ""
+        if "+" in raw_value:
+            return normalize_key_combo(raw_value)
+        return normalize_key_name(raw_value)
 
     def _normalize_text_input(self, value: str) -> str:
         normalized = (value or "").strip().casefold()
@@ -698,6 +713,43 @@ class Player(QWidget):
         if getattr(step, "keyboard_mode", "text") == "key":
             return True
         return is_special_key_name(step.keyboard_input or "")
+
+    def _event_main_key_name(self, event) -> str | None:
+        key_name = self._qt_key_to_name(event.key())
+        if key_name:
+            return key_name
+
+        text = (event.text() or "").strip()
+        if text:
+            return normalize_key_name(text)
+        return None
+
+    def _event_combo_matches(self, event, expected_combo: str) -> bool:
+        parts = [part for part in expected_combo.split("+") if part]
+        if not parts:
+            return False
+
+        required_modifiers = {part for part in parts[:-1] if part in {"ctrl", "shift", "alt", "cmd", "space"}}
+        expected_main = parts[-1]
+        actual_main = self._event_main_key_name(event)
+        return actual_main == expected_main and required_modifiers.issubset(self.pressed_modifier_keys)
+
+    def _required_modifiers_match(self, step) -> bool:
+        required_modifiers = set(getattr(step, "modifier_keys", []) or [])
+        return required_modifiers.issubset(self.pressed_modifier_keys)
+
+    def _qt_modifier_from_key(self, key: int) -> str | None:
+        if key == Qt.Key.Key_Control:
+            return "ctrl"
+        if key == Qt.Key.Key_Shift:
+            return "shift"
+        if key == Qt.Key.Key_Alt:
+            return "alt"
+        if key in (Qt.Key.Key_Meta, Qt.Key.Key_Super_L, Qt.Key.Key_Super_R):
+            return "cmd"
+        if key == Qt.Key.Key_Space:
+            return "space"
+        return None
 
     def _complete_current_step(self):
         if self.current_step_index >= len(self.tutorial.steps):
@@ -796,6 +848,13 @@ class Player(QWidget):
         print(f"  key_name={key_name}, expected={expected}, raw='{step.keyboard_input}'")
 
         if self._is_special_keyboard_step(step):
+            if "+" in expected:
+                if self._event_combo_matches(event, expected):
+                    print("  COMBO MATCH! Advancing to next step.")
+                    self._complete_current_step()
+                    event.accept()
+                    return True
+                return False
             if key_name and key_name == expected:
                 print("  MATCH! Advancing to next step.")
                 self._complete_current_step()
@@ -944,7 +1003,8 @@ class Player(QWidget):
                 # Check if it's a special key step
                 if self._is_special_keyboard_step(step):
                     # Show centered prompt box for key input, but keep focus on Player.
-                    self._show_key_input_prompt(f"Press {display_key_name(step.keyboard_input)}")
+                    display_value = display_key_combo(step.keyboard_input) if "+" in (step.keyboard_input or "") else display_key_name(step.keyboard_input)
+                    self._show_key_input_prompt(f"Press {display_value}")
                     self.video_widget.set_overlay_state(None, False)
                     # Ensure Player receives keyboard events
                     self.setFocus()
@@ -1082,14 +1142,16 @@ class Player(QWidget):
         required_button = getattr(step, 'click_button', 'left')
         in_hitbox = self._is_point_in_hitbox(step, x, y)
         button_matches = button == required_button
+        modifiers_match = self._required_modifiers_match(step)
 
         print(
             f"  target=({step.x},{step.y},{step.width},{step.height}), "
             f"shape={step.shape}, required_button={required_button}, "
-            f"in_hitbox={in_hitbox}, button_matches={button_matches}"
+            f"in_hitbox={in_hitbox}, button_matches={button_matches}, "
+            f"modifiers_match={modifiers_match}"
         )
 
-        if in_hitbox and button_matches:
+        if in_hitbox and button_matches and modifiers_match:
             self._complete_current_step()
             return True
         return False
@@ -1104,7 +1166,8 @@ class Player(QWidget):
 
         required_button = getattr(step, "drag_button", "left")
         in_start = self._is_point_in_hitbox(step, x, y)
-        if button != required_button or not in_start:
+        modifiers_match = self._required_modifiers_match(step)
+        if button != required_button or not in_start or not modifiers_match:
             return False
 
         self.drag_in_progress = True
@@ -1168,6 +1231,10 @@ class Player(QWidget):
             self.resume_audio()  # Resume audio when continuing video
 
     def keyPressEvent(self, event):
+        modifier_key = self._qt_modifier_from_key(event.key())
+        if modifier_key:
+            self.pressed_modifier_keys.add(modifier_key)
+
         # Close player with Ctrl + ` (backtick)
         if event.key() == Qt.Key.Key_QuoteLeft and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             if self.cap: self.cap.release()
@@ -1190,6 +1257,12 @@ class Player(QWidget):
             return
 
         super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event):
+        modifier_key = self._qt_modifier_from_key(event.key())
+        if modifier_key:
+            self.pressed_modifier_keys.discard(modifier_key)
+        super().keyReleaseEvent(event)
             
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -1204,6 +1277,7 @@ class Player(QWidget):
             self.text_input.update()
 
     def closeEvent(self, event):
+        self.pressed_modifier_keys.clear()
         self.stop_audio()  # Stop audio playback
         if self.cap: self.cap.release()
         self.timer.stop()

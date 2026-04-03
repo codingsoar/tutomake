@@ -2,7 +2,7 @@ import json
 import uuid
 from typing import List, Optional
 from pydantic import BaseModel, Field, model_validator
-from .key_utils import is_special_key_name
+from .key_utils import is_special_key_name, normalize_key_name
 
 class Step(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -20,6 +20,7 @@ class Step(BaseModel):
     drag_end_height: int = 50
     drag_path_tolerance: int = 40
     drag_min_distance: int = 30
+    modifier_keys: List[str] = Field(default_factory=list)  # ctrl, shift, alt, cmd, space
     description: str = "Click here"
     instruction: str = ""  # Detailed instruction text for tutorial followers
     shape: str = "rect" # rect, circle
@@ -40,6 +41,8 @@ class Step(BaseModel):
 
     @model_validator(mode="after")
     def normalize_keyboard_mode(self):
+        self.modifier_keys = self._normalize_modifier_keys(self.modifier_keys)
+
         if self.action_type != "keyboard":
             return self
 
@@ -48,6 +51,17 @@ class Step(BaseModel):
             mode = "key" if is_special_key_name(self.keyboard_input) else "text"
         self.keyboard_mode = mode
         return self
+
+    @staticmethod
+    def _normalize_modifier_keys(values: List[str]) -> List[str]:
+        order = {"ctrl": 0, "shift": 1, "alt": 2, "cmd": 3, "space": 4}
+        normalized = []
+        for value in values or []:
+            key_name = normalize_key_name(value)
+            if key_name in order and key_name not in normalized:
+                normalized.append(key_name)
+        normalized.sort(key=lambda item: order[item])
+        return normalized
     
 class Tutorial(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))

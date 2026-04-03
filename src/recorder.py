@@ -10,7 +10,7 @@ import os
 import wave
 import cv2
 import numpy as np
-from .key_utils import display_key_name, normalize_key_name
+from .key_utils import display_key_combo, display_key_name, normalize_key_combo, normalize_key_name
 from .model import Step, Tutorial
 
 # Audio recording support
@@ -86,7 +86,9 @@ class Recorder:
         self.middle_press_pos: Optional[tuple[int, int]] = None
         self.middle_last_pos: Optional[tuple[int, int]] = None
         self.middle_press_timestamp: float = 0.0
+        self.middle_press_modifier_keys: list[str] = []
         self.middle_drag_threshold = 30
+        self.current_modifier_keys: set[str] = set()
 
     def start(self):
         if self.is_recording:
@@ -157,7 +159,7 @@ class Recorder:
         self.listener.start()
         
         # Keyboard listener for text input recording
-        self.keyboard_listener = keyboard.Listener(on_press=self._on_key_press)
+        self.keyboard_listener = keyboard.Listener(on_press=self._on_key_press, on_release=self._on_key_release)
         self.keyboard_listener.start()
         
         # Reset keyboard buffer
@@ -408,13 +410,16 @@ class Recorder:
                 self.middle_press_pos = (x, y)
                 self.middle_last_pos = (x, y)
                 self.middle_press_timestamp = current_video_time
+                self.middle_press_modifier_keys = self._current_modifier_list()
             else:
                 press_pos = self.middle_press_pos
                 last_pos = self.middle_last_pos or (x, y)
                 timestamp = self.middle_press_timestamp
+                modifier_keys = list(self.middle_press_modifier_keys)
                 self.middle_press_pos = None
                 self.middle_last_pos = None
                 self.middle_press_timestamp = 0.0
+                self.middle_press_modifier_keys = []
 
                 if not press_pos:
                     return
@@ -423,12 +428,12 @@ class Recorder:
                 if distance >= self.middle_drag_threshold:
                     threading.Thread(
                         target=self._capture_drag_step,
-                        args=(press_pos[0], press_pos[1], last_pos[0], last_pos[1], timestamp, "middle"),
+                        args=(press_pos[0], press_pos[1], last_pos[0], last_pos[1], timestamp, "middle", modifier_keys),
                     ).start()
                 else:
                     threading.Thread(
                         target=self._capture_step,
-                        args=(x, y, timestamp, button_name),
+                        args=(x, y, timestamp, button_name, modifier_keys),
                     ).start()
             return
 
@@ -436,7 +441,8 @@ class Recorder:
             return
 
         # We can still capture a screenshot for the thumbnail/list view
-        threading.Thread(target=self._capture_step, args=(x, y, current_video_time, button_name)).start()
+        modifier_keys = self._current_modifier_list()
+        threading.Thread(target=self._capture_step, args=(x, y, current_video_time, button_name, modifier_keys)).start()
 
     def _capture_monitor_screenshot(self, x, y, action_label="Click"):
         ts_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -476,7 +482,7 @@ class Recorder:
 
         return filepath, monitor["left"], monitor["top"]
 
-    def _capture_step(self, x, y, timestamp, button_name="Click"):
+    def _capture_step(self, x, y, timestamp, button_name="Click", modifier_keys=None):
         # We'll stick to full screen capture for the step image for now, 
         # but in video mode, we rely on the video mainly. 
         # The step image serves as a visual reference in the Editor.
@@ -491,6 +497,7 @@ class Recorder:
         rel_x = x - monitor_left
         rel_y = y - monitor_top
         
+        modifier_keys = list(modifier_keys or [])
         step = Step(
             image_path=filepath,
             x=int(rel_x - width / 2),
@@ -498,7 +505,9 @@ class Recorder:
             width=width,
             height=height,
             click_button=button_name.lower(),  # left, right, middle
-            description=f"{button_name} click here",
+            modifier_keys=modifier_keys,
+            description=self._build_click_description(button_name, modifier_keys),
+            instruction=self._build_click_instruction(button_name, modifier_keys),
             timestamp=timestamp
         )
         self._insert_step_sorted(step)
@@ -507,7 +516,7 @@ class Recorder:
         if self.on_step_callback:
             self.on_step_callback(step)
 
-    def _capture_drag_step(self, start_x, start_y, end_x, end_y, timestamp, button_name="middle"):
+    def _capture_drag_step(self, start_x, start_y, end_x, end_y, timestamp, button_name="middle", modifier_keys=None):
         filepath, monitor_left, monitor_top = self._capture_monitor_screenshot(start_x, start_y, f"{button_name} drag")
         if not filepath:
             return
@@ -519,6 +528,7 @@ class Recorder:
         rel_end_x = end_x - monitor_left
         rel_end_y = end_y - monitor_top
         distance = math.hypot(rel_end_x - rel_start_x, rel_end_y - rel_start_y)
+        modifier_keys = list(modifier_keys or [])
 
         step = Step(
             image_path=filepath,
@@ -533,8 +543,9 @@ class Recorder:
             drag_end_width=width,
             drag_end_height=height,
             drag_min_distance=max(int(distance * 0.35), self.middle_drag_threshold),
-            description=f"{button_name.title()} drag here",
-            instruction=self._build_drag_instruction(rel_start_x, rel_start_y, rel_end_x, rel_end_y, button_name),
+            modifier_keys=modifier_keys,
+            description=self._build_drag_description(button_name, modifier_keys),
+            instruction=self._build_drag_instruction(rel_start_x, rel_start_y, rel_end_x, rel_end_y, button_name, modifier_keys),
             timestamp=timestamp
         )
         self._insert_step_sorted(step)
@@ -546,14 +557,47 @@ class Recorder:
         if self.on_step_callback:
             self.on_step_callback(step)
 
-    def _build_drag_instruction(self, start_x, start_y, end_x, end_y, button_name="middle"):
+    def _build_drag_instruction(self, start_x, start_y, end_x, end_y, button_name="middle", modifier_keys=None):
         dx = end_x - start_x
         dy = end_y - start_y
         if abs(dx) >= abs(dy):
             direction = "right" if dx >= 0 else "left"
         else:
             direction = "down" if dy >= 0 else "up"
-        return f"Press the {button_name} mouse button and drag {direction}"
+        modifier_prefix = self._build_modifier_phrase(modifier_keys)
+        pointer_phrase = f"press the {button_name} mouse button and drag {direction}"
+        return f"{modifier_prefix}{pointer_phrase}".capitalize()
+
+    def _build_click_description(self, button_name, modifier_keys):
+        modifier_prefix = self._build_modifier_phrase(modifier_keys, joiner="+")
+        return f"{modifier_prefix}{button_name} click here" if modifier_prefix else f"{button_name} click here"
+
+    def _build_click_instruction(self, button_name, modifier_keys):
+        modifier_prefix = self._build_modifier_phrase(modifier_keys)
+        return f"{modifier_prefix}click with the {button_name.lower()} mouse button".capitalize()
+
+    def _build_drag_description(self, button_name, modifier_keys):
+        modifier_prefix = self._build_modifier_phrase(modifier_keys, joiner="+")
+        button_label = button_name.title()
+        return f"{modifier_prefix}{button_label} drag here" if modifier_prefix else f"{button_label} drag here"
+
+    def _build_modifier_phrase(self, modifier_keys, joiner=" + "):
+        labels = [display_key_name(modifier) for modifier in modifier_keys or []]
+        if not labels:
+            return ""
+        if joiner == "+":
+            return f"{'+'.join(labels)} "
+        return f"hold {' + '.join(labels)} and "
+
+    def _current_modifier_list(self):
+        order = ["ctrl", "shift", "alt", "cmd", "space"]
+        return [key for key in order if key in self.current_modifier_keys]
+
+    def _modifier_from_key(self, key):
+        key_name = normalize_key_name(getattr(key, "name", "") or "")
+        if key_name in {"ctrl", "shift", "alt", "cmd"}:
+            return key_name
+        return None
 
     def _insert_step_sorted(self, step: Step):
         insert_idx = 0
@@ -566,6 +610,14 @@ class Recorder:
     def _on_key_press(self, key):
         """Handle keyboard input during recording."""
         if not self.is_recording:
+            return
+
+        modifier_key = self._modifier_from_key(key)
+        if modifier_key:
+            self.current_modifier_keys.add(modifier_key)
+            return
+        if key == keyboard.Key.space and not self.key_buffer:
+            self.current_modifier_keys.add("space")
             return
             
         try:
@@ -585,6 +637,13 @@ class Recorder:
             # Get the character
             if (hasattr(key, 'char') and key.char) or keypad_char:
                 char = key.char if hasattr(key, 'char') and key.char else keypad_char
+
+                modifier_keys = self._current_modifier_list()
+                if modifier_keys:
+                    if self.key_buffer:
+                        self._save_keyboard_step()
+                    self._save_key_combo_step(char, modifier_keys)
+                    return
                 
                 # Start buffer timing if this is the first key
                 if not self.key_buffer:
@@ -610,14 +669,32 @@ class Recorder:
                     
             # Handle special keys as separate steps
             elif key == keyboard.Key.delete:
+                modifier_keys = self._current_modifier_list()
+                if modifier_keys:
+                    if self.key_buffer:
+                        self._save_keyboard_step()
+                    self._save_key_combo_step("delete", modifier_keys)
+                    return
                 if self.key_buffer:
                     self._save_keyboard_step()
                 self._save_special_key_step("delete")
             elif key == keyboard.Key.tab:
+                modifier_keys = self._current_modifier_list()
+                if modifier_keys:
+                    if self.key_buffer:
+                        self._save_keyboard_step()
+                    self._save_key_combo_step("tab", modifier_keys)
+                    return
                 if self.key_buffer:
                     self._save_keyboard_step()
                 self._save_special_key_step("tab")
             elif key == keyboard.Key.esc:
+                modifier_keys = self._current_modifier_list()
+                if modifier_keys:
+                    if self.key_buffer:
+                        self._save_keyboard_step()
+                    self._save_key_combo_step("esc", modifier_keys)
+                    return
                 if self.key_buffer:
                     self._save_keyboard_step()
                 self._save_special_key_step("esc")
@@ -625,16 +702,35 @@ class Recorder:
                 # Handle F-keys and arrow keys
                 key_name = key.name
                 if key_name.startswith('f') and key_name[1:].isdigit():
+                    modifier_keys = self._current_modifier_list()
+                    if modifier_keys:
+                        if self.key_buffer:
+                            self._save_keyboard_step()
+                        self._save_key_combo_step(key_name, modifier_keys)
+                        return
                     if self.key_buffer:
                         self._save_keyboard_step()
                     self._save_special_key_step(key_name)
                 elif key_name in ['up', 'down', 'left', 'right']:
+                    modifier_keys = self._current_modifier_list()
+                    if modifier_keys:
+                        if self.key_buffer:
+                            self._save_keyboard_step()
+                        self._save_key_combo_step(key_name, modifier_keys)
+                        return
                     if self.key_buffer:
                         self._save_keyboard_step()
                     self._save_special_key_step(key_name)
                     
         except AttributeError:
             pass  # Special keys we don't handle
+
+    def _on_key_release(self, key):
+        modifier_key = self._modifier_from_key(key)
+        if modifier_key:
+            self.current_modifier_keys.discard(modifier_key)
+        elif key == keyboard.Key.space:
+            self.current_modifier_keys.discard("space")
     
     def _get_current_video_time(self):
         """Get current video timestamp based on frame count."""
@@ -701,5 +797,25 @@ class Recorder:
         self._insert_step_sorted(step)
         print(f"Captured special key: {normalized_key_name} (timestamp={timestamp:.3f}s)")
         
+        if self.on_step_callback:
+            self.on_step_callback(step)
+
+    def _save_key_combo_step(self, key_name, modifier_keys):
+        timestamp = self._get_current_video_time()
+        combo = normalize_key_combo("+".join([*modifier_keys, key_name]))
+
+        step = Step(
+            action_type="keyboard",
+            x=100,
+            y=100,
+            description=f"Press {display_key_combo(combo)}",
+            keyboard_input=combo,
+            keyboard_mode="key",
+            timestamp=timestamp
+        )
+
+        self._insert_step_sorted(step)
+        print(f"Captured key combo: {combo} (timestamp={timestamp:.3f}s)")
+
         if self.on_step_callback:
             self.on_step_callback(step)

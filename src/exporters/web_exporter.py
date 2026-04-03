@@ -34,6 +34,7 @@ class WebExporter:
             'drag_end_width': getattr(step, 'drag_end_width', step.width),
             'drag_end_height': getattr(step, 'drag_end_height', step.height),
             'drag_min_distance': getattr(step, 'drag_min_distance', 30),
+            'modifier_keys': list(getattr(step, 'modifier_keys', []) or []),
             'shape': step.shape,
             'keyboard_mode': step.keyboard_mode,
             'keyboard_input': step.keyboard_input,
@@ -203,6 +204,19 @@ class WebExporter:
             display: none;
             pointer-events: none;
             box-shadow: 0 0 10px rgba(56, 189, 248, 0.45);
+        }}
+        .modifier-badge {{
+            position: absolute;
+            display: none;
+            padding: 7px 14px;
+            border-radius: 999px;
+            background: rgba(15, 23, 42, 0.9);
+            color: #e2e8f0;
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            pointer-events: none;
+            box-shadow: 0 10px 25px rgba(15, 23, 42, 0.35);
         }}
         
         @keyframes pulse {{
@@ -405,6 +419,7 @@ class WebExporter:
             <div class="hitbox" id="hitbox"></div>
             <div class="hitbox drag-target" id="dragTarget"></div>
             <div class="drag-line" id="dragLine"></div>
+            <div class="modifier-badge" id="modifierBadge"></div>
         </div>
     </div>
     
@@ -457,6 +472,7 @@ class WebExporter:
         const hitbox = document.getElementById('hitbox');
         const dragTarget = document.getElementById('dragTarget');
         const dragLine = document.getElementById('dragLine');
+        const modifierBadge = document.getElementById('modifierBadge');
         const keyboardModal = document.getElementById('keyboardModal');
         const modalTitle = document.getElementById('modalTitle');
         const modalInput = document.getElementById('modalInput');
@@ -464,6 +480,7 @@ class WebExporter:
         const modalInputGhost = document.getElementById('modalInputGhost');
         const modalInputWrap = document.getElementById('modalInputWrap');
         let tutorialDrag = null;
+        const pressedModifierKeys = new Set();
         
         // Initialize
         function init() {{
@@ -536,6 +553,7 @@ class WebExporter:
             hitbox.style.display = 'none';
             dragTarget.style.display = 'none';
             dragLine.style.display = 'none';
+            modifierBadge.style.display = 'none';
         }}
 
         function positionClickHitbox(step) {{
@@ -573,6 +591,13 @@ class WebExporter:
             dragLine.style.top = startCenter.y + 'px';
             dragLine.style.width = Math.hypot(dx, dy) + 'px';
             dragLine.style.transform = `rotate(${{Math.atan2(dy, dx)}}rad)`;
+            const modifierText = (step.modifier_keys || []).join(' + ').replace(/\\b\\w/g, ch => ch.toUpperCase());
+            if (modifierText) {{
+                modifierBadge.style.display = 'block';
+                modifierBadge.textContent = modifierText;
+                modifierBadge.style.left = step.x + 'px';
+                modifierBadge.style.top = Math.max(12, step.y - 42) + 'px';
+            }}
             tutorialDrag = {{
                 active: false,
                 validDistance: false,
@@ -612,6 +637,21 @@ class WebExporter:
             if (button === 1) return 'middle';
             if (button === 2) return 'right';
             return 'left';
+        }}
+
+        function normalizeModifierKey(key) {{
+            const value = (key || '').toLowerCase();
+            if (value === 'control') return 'ctrl';
+            if (value === 'shift') return 'shift';
+            if (value === 'alt') return 'alt';
+            if (value === 'meta' || value === 'os') return 'cmd';
+            if (value === ' ' || value === 'spacebar' || value === 'space') return 'space';
+            return '';
+        }}
+
+        function requiredModifiersMatch(step) {{
+            const required = step.modifier_keys || [];
+            return required.every(key => pressedModifierKeys.has(key));
         }}
         
         function showKeyboardModal(step) {{
@@ -735,6 +775,7 @@ class WebExporter:
             const step = steps[currentStep];
             if (!step || step.action_type !== 'click') return;
             if ((step.click_button || 'left') !== 'left') return;
+            if (!requiredModifiersMatch(step)) return;
             e.stopPropagation();
             this.style.background = 'rgba(0, 255, 0, 0.5)';
             setTimeout(() => nextStep(), 200);
@@ -746,6 +787,7 @@ class WebExporter:
             const required = step.click_button || 'left';
             const clicked = e.button === 1 ? 'middle' : (e.button === 2 ? 'right' : 'left');
             if (required !== clicked) return;
+            if (!requiredModifiersMatch(step)) return;
             e.preventDefault();
             e.stopPropagation();
             this.style.background = 'rgba(0, 255, 0, 0.5)';
@@ -766,6 +808,7 @@ class WebExporter:
                 if (step && step.action_type === 'mouse_drag') {{
                     const requiredButton = step.drag_button || 'left';
                     if (mouseButtonName(e.button) !== requiredButton) return;
+                    if (!requiredModifiersMatch(step)) return;
                     const point = clientToImagePoint(e.clientX, e.clientY);
                     if (pointInStepArea(step, point.x, point.y, false)) {{
                         tutorialDrag = {{
@@ -807,6 +850,10 @@ class WebExporter:
                         tutorialDrag.active = false;
                         return;
                     }}
+                    if (!requiredModifiersMatch(step)) {{
+                        tutorialDrag.active = false;
+                        return;
+                    }}
                     const point = clientToImagePoint(e.clientX, e.clientY);
                     const completed = tutorialDrag.validDistance && pointInStepArea(step, point.x, point.y, true);
                     tutorialDrag.active = false;
@@ -823,6 +870,24 @@ class WebExporter:
             
             window.addEventListener('resize', fitToWindow);
         }}
+
+        window.addEventListener('keydown', function(e) {{
+            const modifierKey = normalizeModifierKey(e.key);
+            if (modifierKey) {{
+                pressedModifierKeys.add(modifierKey);
+            }}
+        }});
+
+        window.addEventListener('keyup', function(e) {{
+            const modifierKey = normalizeModifierKey(e.key);
+            if (modifierKey) {{
+                pressedModifierKeys.delete(modifierKey);
+            }}
+        }});
+
+        window.addEventListener('blur', function() {{
+            pressedModifierKeys.clear();
+        }});
         
         function updateTransform() {{
             canvasInner.style.transform = `translate(${{panX}}px, ${{panY}}px) scale(${{scale}})`;
@@ -1130,6 +1195,19 @@ class WebExporter:
             pointer-events: none;
             box-shadow: 0 0 10px rgba(56, 189, 248, 0.45);
         }}
+        .modifier-badge {{
+            position: absolute;
+            display: none;
+            padding: 7px 14px;
+            border-radius: 999px;
+            background: rgba(15, 23, 42, 0.9);
+            color: #e2e8f0;
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            pointer-events: none;
+            box-shadow: 0 10px 25px rgba(15, 23, 42, 0.35);
+        }}
         
         @keyframes pulse {{
             0%, 100% {{ transform: scale(1); }}
@@ -1261,6 +1339,7 @@ class WebExporter:
             <div class="hitbox" id="hitbox"></div>
             <div class="hitbox drag-target" id="dragTarget"></div>
             <div class="drag-line" id="dragLine"></div>
+            <div class="modifier-badge" id="modifierBadge"></div>
         </div>
     </div>
     
@@ -1301,6 +1380,7 @@ class WebExporter:
         const hitbox = document.getElementById('hitbox');
         const dragTarget = document.getElementById('dragTarget');
         const dragLine = document.getElementById('dragLine');
+        const modifierBadge = document.getElementById('modifierBadge');
         const keyboardModal = document.getElementById('keyboardModal');
         const modalTitle = document.getElementById('modalTitle');
         const modalInput = document.getElementById('modalInput');
@@ -1310,6 +1390,7 @@ class WebExporter:
         const audio = document.getElementById('audio');
         const audioOffset = {self.tutorial.audio_offset};  // Audio sync offset in seconds
         let tutorialDrag = null;
+        const pressedModifierKeys = new Set();
         
         function startTutorial() {{
             document.getElementById('startScreen').classList.add('hidden');
@@ -1384,6 +1465,7 @@ class WebExporter:
             hitbox.style.display = 'none';
             dragTarget.style.display = 'none';
             dragLine.style.display = 'none';
+            modifierBadge.style.display = 'none';
         }}
 
         function positionDragOverlay(step) {{
@@ -1415,6 +1497,13 @@ class WebExporter:
             dragLine.style.top = startCenter.y + 'px';
             dragLine.style.width = Math.hypot(dx, dy) + 'px';
             dragLine.style.transform = `rotate(${{Math.atan2(dy, dx)}}rad)`;
+            const modifierText = (step.modifier_keys || []).join(' + ').replace(/\\b\\w/g, ch => ch.toUpperCase());
+            if (modifierText) {{
+                modifierBadge.style.display = 'block';
+                modifierBadge.textContent = modifierText;
+                modifierBadge.style.left = (step.x * scaleX) + 'px';
+                modifierBadge.style.top = Math.max(12, (step.y * scaleY) - 42) + 'px';
+            }}
             tutorialDrag = {{
                 active: false,
                 validDistance: false,
@@ -1457,11 +1546,27 @@ class WebExporter:
             if (button === 2) return 'right';
             return 'left';
         }}
+
+        function normalizeModifierKey(key) {{
+            const value = (key || '').toLowerCase();
+            if (value === 'control') return 'ctrl';
+            if (value === 'shift') return 'shift';
+            if (value === 'alt') return 'alt';
+            if (value === 'meta' || value === 'os') return 'cmd';
+            if (value === ' ' || value === 'spacebar' || value === 'space') return 'space';
+            return '';
+        }}
+
+        function requiredModifiersMatch(step) {{
+            const required = step.modifier_keys || [];
+            return required.every(key => pressedModifierKeys.has(key));
+        }}
         
         hitbox.addEventListener('click', function() {{
             const step = steps[currentStep];
             if (!step || step.action_type !== 'click') return;
             if ((step.click_button || 'left') !== 'left') return;
+            if (!requiredModifiersMatch(step)) return;
             this.style.background = 'rgba(0, 255, 0, 0.5)';
             setTimeout(nextStep, 200);
         }});
@@ -1472,6 +1577,7 @@ class WebExporter:
             const required = step.click_button || 'left';
             const clicked = e.button === 1 ? 'middle' : (e.button === 2 ? 'right' : 'left');
             if (required !== clicked) return;
+            if (!requiredModifiersMatch(step)) return;
             e.preventDefault();
             this.style.background = 'rgba(0, 255, 0, 0.5)';
             setTimeout(nextStep, 200);
@@ -1592,6 +1698,7 @@ class WebExporter:
             if (!step || step.action_type !== 'mouse_drag') return;
             const requiredButton = step.drag_button || 'left';
             if (mouseButtonName(e.button) !== requiredButton) return;
+            if (!requiredModifiersMatch(step)) return;
             const point = clientToVideoPoint(e.clientX, e.clientY);
             if (!pointInStepArea(step, point.x, point.y, false)) return;
             tutorialDrag = {{
@@ -1620,6 +1727,10 @@ class WebExporter:
                 tutorialDrag.active = false;
                 return;
             }}
+            if (!requiredModifiersMatch(step)) {{
+                tutorialDrag.active = false;
+                return;
+            }}
             const point = clientToVideoPoint(e.clientX, e.clientY);
             const completed = tutorialDrag.validDistance && pointInStepArea(step, point.x, point.y, true);
             tutorialDrag.active = false;
@@ -1628,6 +1739,24 @@ class WebExporter:
                 dragTarget.style.background = 'rgba(0, 255, 0, 0.45)';
                 setTimeout(nextStep, 200);
             }}
+        }});
+
+        window.addEventListener('keydown', function(e) {{
+            const modifierKey = normalizeModifierKey(e.key);
+            if (modifierKey) {{
+                pressedModifierKeys.add(modifierKey);
+            }}
+        }});
+
+        window.addEventListener('keyup', function(e) {{
+            const modifierKey = normalizeModifierKey(e.key);
+            if (modifierKey) {{
+                pressedModifierKeys.delete(modifierKey);
+            }}
+        }});
+
+        window.addEventListener('blur', function() {{
+            pressedModifierKeys.clear();
         }});
 
         modalInput.addEventListener('input', function() {{

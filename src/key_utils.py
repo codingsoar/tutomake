@@ -107,4 +107,35 @@ def display_key_name(value: str) -> str:
     normalized = normalize_key_name(value)
     if normalized.startswith("f") and normalized[1:].isdigit():
         return normalized.upper()
+    if len(normalized) == 1 and normalized.isalpha():
+        return normalized.upper()
     return SPECIAL_KEY_DISPLAY.get(normalized, value)
+
+
+def normalize_key_combo(value: str) -> str:
+    if not value:
+        return ""
+
+    parts = [normalize_key_name(part) for part in value.split("+") if part.strip()]
+    modifiers = []
+    main_key = ""
+    modifier_order = {"ctrl": 0, "shift": 1, "alt": 2, "cmd": 3, "space": 4}
+
+    for part in parts:
+        if part in modifier_order:
+            if part not in modifiers:
+                modifiers.append(part)
+        elif not main_key:
+            main_key = part
+
+    modifiers.sort(key=lambda item: modifier_order[item])
+    if main_key:
+        modifiers.append(main_key)
+    return "+".join(modifiers)
+
+
+def display_key_combo(value: str) -> str:
+    normalized = normalize_key_combo(value)
+    if not normalized:
+        return ""
+    return " + ".join(display_key_name(part) for part in normalized.split("+"))
