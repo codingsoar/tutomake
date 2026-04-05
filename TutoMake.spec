@@ -1,5 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
+from pathlib import Path
 
+project_dir = Path(SPEC).resolve().parent
 
 a = Analysis(
     ['src\\main.py'],
@@ -35,5 +37,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['icon.ico'],
+    icon=[str(project_dir / 'icon.ico')],
 )

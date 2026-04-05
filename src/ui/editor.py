@@ -615,7 +615,7 @@ class TimelineWidget(QWidget):
         
         # Playback state
         self.is_playing = False
-        self.play_timer = QTimer()
+        self.play_timer = QTimer(self)
         self.play_timer.timeout.connect(self._on_play_tick)
         
         self.setMinimumHeight(250)
@@ -727,11 +727,6 @@ class TimelineWidget(QWidget):
         
         main_layout.addLayout(zoom_bar)
         
-        # Playback state
-        self.is_playing = False
-        self.play_timer = QTimer()
-        self.play_timer.timeout.connect(self.advance_frame)
-    
     def on_zoom_slider_changed(self, value):
         """Handle zoom slider value change."""
         self.zoom_scale = value / 100.0
@@ -2376,7 +2371,7 @@ class Editor(QMainWindow):
         if current_time - self._last_frame_time < 0.05:
             self._pending_position = position_seconds
             if self._frame_update_timer is None:
-                self._frame_update_timer = QTimer()
+                self._frame_update_timer = QTimer(self)
                 self._frame_update_timer.setSingleShot(True)
                 self._frame_update_timer.timeout.connect(self._update_pending_frame)
             if not self._frame_update_timer.isActive():
@@ -2414,6 +2409,18 @@ class Editor(QMainWindow):
             self.canvas.adjustSize()
         
         self._last_frame_time = cv2.getTickCount() / cv2.getTickFrequency()
+
+    def closeEvent(self, event):
+        self.timeline.play_timer.stop()
+
+        if getattr(self, "_frame_update_timer", None) is not None:
+            self._frame_update_timer.stop()
+
+        if self.video_cap is not None:
+            self.video_cap.release()
+            self.video_cap = None
+
+        super().closeEvent(event)
 
     def on_add_step(self, timestamp, action_type=None):
         """Add a new step at the given timestamp."""

@@ -34,6 +34,18 @@ class RegressionTests(unittest.TestCase):
         cls.workspace_tmp_root = Path(__file__).resolve().parent.parent / ".test_tmp"
         cls.workspace_tmp_root.mkdir(exist_ok=True)
 
+    @classmethod
+    def tearDownClass(cls):
+        cls.app.closeAllWindows()
+        cls.app.processEvents()
+        cls.app.quit()
+        cls.app.processEvents()
+
+    def cleanup_widget(self, widget):
+        widget.close()
+        widget.deleteLater()
+        self.app.processEvents()
+
     def _make_image(self, path: Path):
         image = np.full((32, 32, 3), 255, dtype=np.uint8)
         ok = cv2.imwrite(str(path), image)
@@ -259,7 +271,7 @@ class RegressionTests(unittest.TestCase):
         self.addCleanup(self.cleanup_tempdir, tmpdir)
         tutorial = Tutorial(title="Editor")
         editor = Editor(tutorial)
-        self.addCleanup(editor.close)
+        self.addCleanup(self.cleanup_widget, editor)
 
         tutorial.audio_path = str(tmpdir / "narration.wav")
         tutorial.audio_offset = 1.5
@@ -279,7 +291,7 @@ class RegressionTests(unittest.TestCase):
         tmpdir = self.make_tempdir()
         self.addCleanup(self.cleanup_tempdir, tmpdir)
         editor = Editor(Tutorial(title="First"))
-        self.addCleanup(editor.close)
+        self.addCleanup(self.cleanup_widget, editor)
 
         editor.tutorial.audio_path = str(tmpdir / "old.wav")
         editor.tutorial.audio_offset = -0.5
