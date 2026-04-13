@@ -8,7 +8,14 @@ import re
 import math
 import cv2
 import numpy as np
-from ..key_utils import display_key_combo, display_key_name, is_special_key_name, normalize_key_combo, normalize_key_name
+from ..key_utils import (
+    display_key_combo,
+    display_key_name,
+    is_special_key_name,
+    normalize_key_code,
+    normalize_key_combo,
+    normalize_key_name,
+)
 from ..model import Tutorial
 
 
@@ -640,6 +647,7 @@ class Player(QWidget):
         # Audio State
         self.audio_player = None
         self.audio_output = None
+        self.audio_delay_timer = None
         self.setup_audio()
 
         self.init_ui()
@@ -701,6 +709,9 @@ class Player(QWidget):
             return normalize_key_combo(raw_value)
         return normalize_key_name(raw_value)
 
+    def _expected_keyboard_code(self, step) -> str:
+        return normalize_key_code(getattr(step, "keyboard_code", ""))
+
     def _normalize_text_input(self, value: str) -> str:
         normalized = (value or "").strip().casefold()
         normalized = re.sub(r"\s*,\s*", ",", normalized)
@@ -724,15 +735,66 @@ class Player(QWidget):
             return normalize_key_name(text)
         return None
 
-    def _event_combo_matches(self, event, expected_combo: str) -> bool:
+    def _qt_key_to_code(self, key: int) -> str | None:
+        if key == Qt.Key.Key_Delete:
+            return "Delete"
+        if key == Qt.Key.Key_Backspace:
+            return "Backspace"
+        if key == Qt.Key.Key_Tab:
+            return "Tab"
+        if key == Qt.Key.Key_Escape:
+            return "Escape"
+        if key == Qt.Key.Key_Return:
+            return "Enter"
+        if key == Qt.Key.Key_Enter:
+            return "NumpadEnter"
+        if key == Qt.Key.Key_Space:
+            return "Space"
+        if key == Qt.Key.Key_Up:
+            return "ArrowUp"
+        if key == Qt.Key.Key_Down:
+            return "ArrowDown"
+        if key == Qt.Key.Key_Left:
+            return "ArrowLeft"
+        if key == Qt.Key.Key_Right:
+            return "ArrowRight"
+        if key == Qt.Key.Key_Home:
+            return "Home"
+        if key == Qt.Key.Key_End:
+            return "End"
+        if key == Qt.Key.Key_PageUp:
+            return "PageUp"
+        if key == Qt.Key.Key_PageDown:
+            return "PageDown"
+        if key == Qt.Key.Key_Insert:
+            return "Insert"
+        if Qt.Key.Key_F1 <= key <= Qt.Key.Key_F12:
+            return f"F{key - Qt.Key.Key_F1 + 1}"
+        if Qt.Key.Key_A <= key <= Qt.Key.Key_Z:
+            return f"Key{chr(ord('A') + key - Qt.Key.Key_A)}"
+        if Qt.Key.Key_0 <= key <= Qt.Key.Key_9:
+            return f"Digit{key - Qt.Key.Key_0}"
+        return None
+
+    def _event_main_key_code(self, event) -> str | None:
+        return self._qt_key_to_code(event.key())
+
+    def _event_combo_matches(self, event, expected_combo: str, expected_code: str = "") -> bool:
         parts = [part for part in expected_combo.split("+") if part]
         if not parts:
             return False
 
         required_modifiers = {part for part in parts[:-1] if part in {"ctrl", "shift", "alt", "cmd", "space"}}
         expected_main = parts[-1]
+        expected_code = normalize_key_code(expected_code)
         actual_main = self._event_main_key_name(event)
-        return actual_main == expected_main and required_modifiers == self.pressed_modifier_keys
+        actual_code = self._event_main_key_code(event)
+        actual_modifiers = set(self.pressed_modifier_keys)
+        if actual_main in actual_modifiers:
+            actual_modifiers.discard(actual_main)
+
+        main_matches = actual_code == expected_code if expected_code else actual_main == expected_main
+        return main_matches and required_modifiers == actual_modifiers
 
     def _required_modifiers_match(self, step) -> bool:
         required_modifiers = set(getattr(step, "modifier_keys", []) or [])
@@ -845,17 +907,19 @@ class Player(QWidget):
 
         key_name = self._qt_key_to_name(event.key())
         expected = self._expected_keyboard_input(step)
+        expected_code = self._expected_keyboard_code(step)
         print(f"  key_name={key_name}, expected={expected}, raw='{step.keyboard_input}'")
 
         if self._is_special_keyboard_step(step):
             if "+" in expected:
-                if self._event_combo_matches(event, expected):
+                if self._event_combo_matches(event, expected, expected_code):
                     print("  COMBO MATCH! Advancing to next step.")
                     self._complete_current_step()
                     event.accept()
                     return True
                 return False
-            if key_name and key_name == expected:
+            actual_code = self._event_main_key_code(event)
+            if (expected_code and actual_code == expected_code) or (not expected_code and key_name and key_name == expected):
                 print("  MATCH! Advancing to next step.")
                 self._complete_current_step()
                 event.accept()
@@ -895,21 +959,29 @@ class Player(QWidget):
             self.audio_player = QMediaPlayer()
             self.audio_player.setAudioOutput(self.audio_output)
             self.audio_player.setSource(QUrl.fromLocalFile(self.tutorial.audio_path))
-            print(f"Audio loaded, offset: {self.tutorial.audio_offset}s")
+            trim_start = float(getattr(self.tutorial, "audio_trim_start", 0.0) or 0.0)
+            if trim_start > 0:
+                self.audio_player.setPosition(int(trim_start * 1000))
+            print(
+                f"Audio loaded, offset: {self.tutorial.audio_offset}s, "
+                f"trim_start: {trim_start}s, trim_end: {getattr(self.tutorial, 'audio_trim_end', None)}"
+            )
         else:
             print("No audio file or file not found")
     
     def play_audio(self):
         """Start audio playback with sync offset."""
         if self.audio_player:
+            trim_start_ms = int(max(0.0, float(getattr(self.tutorial, "audio_trim_start", 0.0) or 0.0)) * 1000)
             # Apply offset: positive offset means audio starts later
             offset_ms = int(self.tutorial.audio_offset * 1000)
             if offset_ms >= 0:
+                self.audio_player.setPosition(trim_start_ms)
                 # Delay audio start - will be handled by timer
-                QTimer.singleShot(offset_ms, self._start_audio_playback)
+                self.audio_delay_timer = QTimer.singleShot(offset_ms, self._start_audio_playback)
             else:
                 # Audio starts before video - seek to position
-                self.audio_player.setPosition(-offset_ms)
+                self.audio_player.setPosition(trim_start_ms - offset_ms)
                 self._start_audio_playback()
     
     def _start_audio_playback(self):
@@ -978,6 +1050,13 @@ class Player(QWidget):
         
         self.video_widget.setPixmap(pixmap)
         self.frame_counter += 1
+
+        trim_end = getattr(self.tutorial, "audio_trim_end", None)
+        trim_start = max(0.0, float(getattr(self.tutorial, "audio_trim_start", 0.0) or 0.0))
+        if trim_end is not None:
+            effective_end = max(0.0, float(trim_end) - trim_start)
+            if (self.frame_counter / self.fps) >= effective_end:
+                self.stop_audio()
         
         self.check_step_trigger()
 

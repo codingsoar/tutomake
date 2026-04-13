@@ -3,14 +3,17 @@ from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QListWidget,
                              QRadioButton, QButtonGroup, QCheckBox, QSlider, QPushButton,
                              QMenu, QMainWindow, QDockWidget, QGraphicsView, QGraphicsScene,
                              QGraphicsRectItem, QGraphicsLineItem, QGraphicsTextItem, QGroupBox,
-                             QComboBox)
+                             QComboBox, QFileDialog, QMessageBox)
 from PySide6.QtGui import QPixmap, QPainter, QPen, QColor, QResizeEvent, QImage, QAction, QPolygon, QFont, QBrush, QWheelEvent
 from PySide6.QtCore import Qt, QRect, QTimer, Signal, QPoint, QRectF, QPointF, QSignalBlocker
 import os
+import tempfile
+import wave
 import cv2
+import numpy as np
 from ..key_utils import display_key_name
 from ..model import Tutorial, Step
-from ..recorder import AUDIO_AVAILABLE, get_audio_input_devices
+from ..recorder import AUDIO_AVAILABLE, get_audio_input_devices, record_test_audio_clip
 
 class ZoomableImageCanvas(QWidget):
     """Image canvas with zoom/pan support for Editor."""
@@ -594,6 +597,14 @@ class TimelineWidget(QWidget):
     step_deleted = Signal(int)   # Emitted when user deletes a step (index)
     steps_reordered = Signal()   # Emitted when steps are reordered by drag-and-drop
     position_changed = Signal(float)  # Emitted when slider position changes (seconds)
+    split_requested = Signal()
+    delete_gap_requested = Signal(bool)
+    audio_offset_preview = Signal(float)
+    audio_offset_committed = Signal(float)
+    audio_trim_preview = Signal()
+    audio_trim_committed = Signal()
+    audio_trim_preview = Signal()
+    audio_trim_committed = Signal()
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -612,6 +623,20 @@ class TimelineWidget(QWidget):
         self.track_clip_h = 0
         self.total_height = 0
         self.scene_duration = 0.0
+        self.edit_range_start = None
+        self.edit_range_end = None
+        self.range_overlay_item = None
+        self.audio_rect_item = None
+        self.audio_text_item = None
+        self.audio_waveform_items = []
+        self.audio_handle_items = []
+        self.track_audio_y = 0
+        self.track_audio_h = 0
+        self.leading_padding_seconds = 0.0
+        self.snap_enabled = True
+        self.current_snap_interval = 0.5
+        self.snap_temporarily_disabled = False
+        self.minimum_audio_clip_duration = 0.2
         
         # Playback state
         self.is_playing = False
@@ -634,6 +659,81 @@ class TimelineWidget(QWidget):
         
         # Zoom label for bottom overlay
         self.zoom_label = QLabel("100%")
+        self.time_label = QLabel("00:00.0 / 00:00.0")
+        self.time_label.setStyleSheet("color: #ddd; font-size: 11px; padding: 2px 6px;")
+
+        controls_bar = QHBoxLayout()
+        controls_bar.setContentsMargins(8, 6, 8, 6)
+        controls_bar.setSpacing(8)
+
+        timeline_btn_style = """
+            QPushButton {
+                min-height: 32px;
+                min-width: 78px;
+                padding: 6px 12px;
+                font-size: 12px;
+                font-weight: 600;
+                background: #353535;
+                color: #f3f3f3;
+                border: 1px solid #4a4a4a;
+                border-radius: 6px;
+            }
+            QPushButton:hover {
+                background: #454545;
+                border-color: #5f5f5f;
+            }
+            QPushButton:pressed {
+                background: #2d2d2d;
+            }
+        """
+
+        self.btn_step_back = QPushButton("-0.1s")
+        self.btn_step_back.setStyleSheet(timeline_btn_style)
+        self.btn_step_back.clicked.connect(lambda: self.move_playhead(-0.1))
+        controls_bar.addWidget(self.btn_step_back)
+
+        self.btn_step_forward = QPushButton("+0.1s")
+        self.btn_step_forward.setStyleSheet(timeline_btn_style)
+        self.btn_step_forward.clicked.connect(lambda: self.move_playhead(0.1))
+        controls_bar.addWidget(self.btn_step_forward)
+
+        self.btn_mark_in = QPushButton("Mark In")
+        self.btn_mark_in.setStyleSheet(timeline_btn_style)
+        self.btn_mark_in.clicked.connect(self.mark_range_start)
+        controls_bar.addWidget(self.btn_mark_in)
+
+        self.btn_mark_out = QPushButton("Mark Out")
+        self.btn_mark_out.setStyleSheet(timeline_btn_style)
+        self.btn_mark_out.clicked.connect(self.mark_range_end)
+        controls_bar.addWidget(self.btn_mark_out)
+
+        self.btn_clear_range = QPushButton("Clear Range")
+        self.btn_clear_range.setStyleSheet(timeline_btn_style)
+        self.btn_clear_range.clicked.connect(self.clear_edit_range)
+        controls_bar.addWidget(self.btn_clear_range)
+
+        self.btn_split = QPushButton("Split")
+        self.btn_split.setStyleSheet(timeline_btn_style)
+        self.btn_split.clicked.connect(self.split_requested.emit)
+        controls_bar.addWidget(self.btn_split)
+
+        self.btn_delete_gap = QPushButton("Delete Gap")
+        self.btn_delete_gap.setStyleSheet(timeline_btn_style)
+        self.btn_delete_gap.clicked.connect(lambda: self.delete_gap_requested.emit(False))
+        controls_bar.addWidget(self.btn_delete_gap)
+
+        self.btn_ripple_delete = QPushButton("Ripple Delete")
+        self.btn_ripple_delete.setStyleSheet(timeline_btn_style)
+        self.btn_ripple_delete.clicked.connect(lambda: self.delete_gap_requested.emit(True))
+        controls_bar.addWidget(self.btn_ripple_delete)
+
+        controls_bar.addStretch()
+        self.snap_label = QLabel("Snap 0.5s")
+        self.snap_label.setStyleSheet("color: #a5d6a7; font-size: 11px; padding: 2px 6px;")
+        controls_bar.addWidget(self.snap_label)
+        controls_bar.addWidget(self.time_label)
+        controls_bar.addWidget(self.zoom_label)
+        main_layout.addLayout(controls_bar)
         
         # ===== Timeline Area with Track Labels =====
         timeline_container = QHBoxLayout()
@@ -780,10 +880,70 @@ class TimelineWidget(QWidget):
             self.video_duration = frame_count / self.fps if self.fps > 0 else 0
             cap.release()
         else:
-            self.video_duration = 0
+            step_timestamps = [float(step.timestamp or 0.0) for step in getattr(tutorial, "steps", [])]
+            self.video_duration = (max(step_timestamps) + 1.0) if step_timestamps else 0
             self.fps = 24.0
+        self.current_position = max(0.0, min(self.current_position, self.video_duration))
         self.update_time_label()
         self.rebuild_scene()
+
+    def move_playhead(self, delta_seconds):
+        self.current_position = max(0.0, min(self.current_position + delta_seconds, self.video_duration))
+        self.update_time_label()
+        self.position_changed.emit(self.current_position)
+        self.update_playhead()
+
+    def scene_x_for_time(self, seconds: float) -> int:
+        pps = self.pixels_per_second * self.zoom_scale
+        return int((self.leading_padding_seconds + seconds) * pps)
+
+    def time_for_scene_x(self, scene_x: float) -> float:
+        pps = self.pixels_per_second * self.zoom_scale
+        return (scene_x / pps) - self.leading_padding_seconds
+
+    def _snap_interval_for_zoom(self) -> float:
+        pps = self.pixels_per_second * self.zoom_scale
+        if pps >= 200:
+            return 0.1
+        if pps >= 120:
+            return 0.25
+        if pps >= 70:
+            return 0.5
+        if pps >= 25:
+            return 1.0
+        return 2.0
+
+    def snap_time(self, seconds: float) -> float:
+        if not self.snap_enabled or self.snap_temporarily_disabled:
+            return seconds
+        interval = self._snap_interval_for_zoom()
+        self.current_snap_interval = interval
+        return round(seconds / interval) * interval
+
+    def mark_range_start(self):
+        self.edit_range_start = self.current_position
+        self.update_time_label()
+        self.rebuild_scene()
+
+    def mark_range_end(self):
+        self.edit_range_end = self.current_position
+        self.update_time_label()
+        self.rebuild_scene()
+
+    def clear_edit_range(self):
+        self.edit_range_start = None
+        self.edit_range_end = None
+        self.update_time_label()
+        self.rebuild_scene()
+
+    def get_edit_range(self):
+        if self.edit_range_start is None or self.edit_range_end is None:
+            return None
+        start = min(self.edit_range_start, self.edit_range_end)
+        end = max(self.edit_range_start, self.edit_range_end)
+        if end <= start:
+            return None
+        return start, end
     
     def toggle_play(self):
         """Toggle playback state."""
@@ -823,26 +983,24 @@ class TimelineWidget(QWidget):
             return
         elif event.key() == Qt.Key.Key_Home:
             self.current_position = 0
+            self.update_time_label()
             self.update_playhead()
             self.position_changed.emit(self.current_position)
             event.accept()
             return
         elif event.key() == Qt.Key.Key_End:
             self.current_position = self.video_duration
+            self.update_time_label()
             self.update_playhead()
             self.position_changed.emit(self.current_position)
             event.accept()
             return
         elif event.key() == Qt.Key.Key_Left:
-            self.current_position = max(0, self.current_position - 1)
-            self.update_playhead()
-            self.position_changed.emit(self.current_position)
+            self.move_playhead(-0.1)
             event.accept()
             return
         elif event.key() == Qt.Key.Key_Right:
-            self.current_position = min(self.video_duration, self.current_position + 1)
-            self.update_playhead()
-            self.position_changed.emit(self.current_position)
+            self.move_playhead(0.1)
             event.accept()
             return
         
@@ -855,11 +1013,16 @@ class TimelineWidget(QWidget):
         self.step_text_items.clear()
         self.playhead_line_item = None
         self.playhead_triangle_item = None
+        self.audio_rect_item = None
+        self.audio_text_item = None
+        self.audio_waveform_items = []
+        self.audio_handle_items = []
         
         pps = self.pixels_per_second * self.zoom_scale
         duration = max(self.video_duration, 3600)  # Minimum 1 hour (feels infinite)
-        total_width = int(duration * pps) + 100
+        total_width = int((duration + self.leading_padding_seconds + 2) * pps) + 100
         self.scene_duration = duration
+        self.current_snap_interval = self._snap_interval_for_zoom()
         
         ruler_height = 25
         track_height = 40  # Taller tracks for 2-track layout
@@ -867,6 +1030,8 @@ class TimelineWidget(QWidget):
         self.total_height = total_height
         self.track_clip_y = ruler_height + 2
         self.track_clip_h = track_height - 4
+        self.track_audio_y = ruler_height + track_height + 2
+        self.track_audio_h = track_height - 4
         
         # Set scene rect
         self.scene.setSceneRect(0, 0, total_width, total_height)
@@ -885,7 +1050,7 @@ class TimelineWidget(QWidget):
             interval = 10
             
         for t in range(0, int(duration) + interval, interval):
-            x = int(t * pps)
+            x = self.scene_x_for_time(t)
             line = self.scene.addLine(x, 0, x, total_height, grid_pen)
         
         # Horizontal grid lines (track separators) - only 3 lines for 2 tracks
@@ -899,7 +1064,7 @@ class TimelineWidget(QWidget):
         
         # Time labels
         for t in range(0, int(duration) + interval, interval):
-            x = int(t * pps)
+            x = self.scene_x_for_time(t)
             
             # Tick mark
             self.scene.addLine(x, ruler_height - 10, x, ruler_height, QPen(QColor(80, 80, 80), 1))
@@ -929,18 +1094,42 @@ class TimelineWidget(QWidget):
             # Track separator line
             self.scene.addLine(0, y + track_height, total_width, y + track_height, 
                               QPen(QColor(50, 50, 50), 1))
+
+        edit_range = self.get_edit_range()
+        if edit_range:
+            start, end = edit_range
+            overlay_x = int(start * pps)
+            overlay_x = self.scene_x_for_time(start)
+            overlay_w = max(1, int((end - start) * pps))
+            self.range_overlay_item = self.scene.addRect(
+                overlay_x,
+                ruler_height,
+                overlay_w,
+                total_height - ruler_height,
+                QPen(QColor(255, 196, 0, 160), 1, Qt.PenStyle.DashLine),
+                QBrush(QColor(255, 196, 0, 45)),
+            )
         
         # ===== Step Clips on V1 =====
         if self.tutorial and self.tutorial.steps:
             for i, step in enumerate(self.tutorial.steps):
                 clip = self.scene.addRect(0, self.track_clip_y, 0, self.track_clip_h, QPen(), QBrush())
                 clip.setData(0, i)
+                clip.setData(1, "step")
                 clip.setFlag(clip.GraphicsItemFlag.ItemIsSelectable, True)
                 text = self.scene.addText("", QFont("Arial", 9, QFont.Weight.Bold))
                 text.setDefaultTextColor(QColor(255, 255, 255))
                 self.step_rect_items[i] = clip
                 self.step_text_items[i] = text
                 self._update_step_item(i)
+
+        if self.tutorial and (self.tutorial.audio_path or self.tutorial.video_path):
+            self.audio_rect_item = self.scene.addRect(0, self.track_audio_y, 0, self.track_audio_h, QPen(), QBrush())
+            self.audio_rect_item.setData(0, "audio")
+            self.audio_rect_item.setData(1, "audio")
+            self.audio_text_item = self.scene.addText("", QFont("Arial", 9, QFont.Weight.Bold))
+            self.audio_text_item.setDefaultTextColor(QColor(230, 255, 230))
+            self._update_audio_item()
 
         self._create_playhead_items()
         self.update_playhead()
@@ -960,7 +1149,7 @@ class TimelineWidget(QWidget):
         pps = self.pixels_per_second * self.zoom_scale
         clip_w = self._step_clip_width()
         step = self.tutorial.steps[step_idx]
-        x = int(step.timestamp * pps)
+        x = self.scene_x_for_time(step.timestamp)
 
         if step.action_type == "keyboard":
             clip_color = QColor(0, 120, 200)
@@ -981,6 +1170,170 @@ class TimelineWidget(QWidget):
         text_item = self.step_text_items[step_idx]
         text_item.setPlainText(str(step_idx + 1))
         text_item.setPos(x + 4, self.track_clip_y)
+
+    def _update_audio_item(self):
+        if not self.tutorial or not self.audio_rect_item or not self.audio_text_item:
+            return
+
+        for item in self.audio_handle_items:
+            if item.scene() is self.scene:
+                self.scene.removeItem(item)
+        self.audio_handle_items = []
+
+        offset = float(getattr(self.tutorial, "audio_offset", 0.0) or 0.0)
+        x = self.scene_x_for_time(offset)
+        effective_duration = self.get_effective_audio_duration()
+        pps = self.pixels_per_second * self.zoom_scale
+        clip_w = max(24, int(max(effective_duration, self.minimum_audio_clip_duration) * pps))
+        self.audio_rect_item.setRect(x, self.track_audio_y, clip_w, self.track_audio_h)
+        self.audio_rect_item.setPen(QPen(QColor(170, 255, 170, 180), 1))
+        self.audio_rect_item.setBrush(QBrush(QColor(70, 130, 70, 180)))
+        trim_start = float(getattr(self.tutorial, "audio_trim_start", 0.0) or 0.0)
+        trim_end = getattr(self.tutorial, "audio_trim_end", None)
+        trim_text = f"{trim_start:.1f}s"
+        if trim_end is not None:
+            trim_text += f"-{float(trim_end):.1f}s"
+        self.audio_text_item.setPlainText(f"Audio {offset:+.1f}s  Trim {trim_text}")
+        self.audio_text_item.setPos(x + 6, self.track_audio_y + 2)
+        self._draw_audio_waveform(x, clip_w)
+        self._draw_audio_handles(x, clip_w)
+
+    def get_audio_source_duration(self):
+        if not self.tutorial:
+            return None
+        audio_path = self.tutorial.audio_path
+        if audio_path and os.path.exists(audio_path) and audio_path.lower().endswith(".wav"):
+            try:
+                with wave.open(audio_path, "rb") as wav_file:
+                    frame_count = wav_file.getnframes()
+                    frame_rate = wav_file.getframerate() or 0
+                if frame_rate > 0:
+                    return frame_count / frame_rate
+            except Exception:
+                return None
+        if self.video_duration > 0:
+            return self.video_duration
+        return None
+
+    def get_audio_trim_bounds(self):
+        trim_start = max(0.0, float(getattr(self.tutorial, "audio_trim_start", 0.0) or 0.0))
+        trim_end = getattr(self.tutorial, "audio_trim_end", None)
+        source_duration = self.get_audio_source_duration()
+        if trim_end is None:
+            trim_end = source_duration
+        if source_duration is not None:
+            trim_end = min(float(trim_end), source_duration)
+        if trim_end is None:
+            trim_end = trim_start + max(self.video_duration, 1.0)
+        trim_end = max(trim_start + self.minimum_audio_clip_duration, float(trim_end))
+        return trim_start, trim_end
+
+    def get_effective_audio_duration(self):
+        trim_start, trim_end = self.get_audio_trim_bounds()
+        return max(self.minimum_audio_clip_duration, trim_end - trim_start)
+
+    def _draw_audio_handles(self, clip_x: int, clip_width: int):
+        handle_width = 8
+        handle_brush = QBrush(QColor(235, 255, 235, 220))
+        handle_pen = QPen(QColor(220, 255, 220, 180), 1)
+        grip_height = max(12, self.track_audio_h - 8)
+        grip_y = self.track_audio_y + (self.track_audio_h - grip_height) / 2
+
+        left_handle = self.scene.addRect(
+            clip_x - handle_width / 2,
+            grip_y,
+            handle_width,
+            grip_height,
+            handle_pen,
+            handle_brush,
+        )
+        left_handle.setData(0, "audio")
+        left_handle.setData(1, "audio")
+        left_handle.setData(2, "audio_handle_left")
+
+        right_handle = self.scene.addRect(
+            clip_x + clip_width - handle_width / 2,
+            grip_y,
+            handle_width,
+            grip_height,
+            handle_pen,
+            handle_brush,
+        )
+        right_handle.setData(0, "audio")
+        right_handle.setData(1, "audio")
+        right_handle.setData(2, "audio_handle_right")
+
+        self.audio_handle_items.extend([left_handle, right_handle])
+
+    def _draw_audio_waveform(self, clip_x: int, clip_width: int):
+        for item in self.audio_waveform_items:
+            if item.scene() is self.scene:
+                self.scene.removeItem(item)
+        self.audio_waveform_items = []
+
+        amplitudes = self._get_audio_waveform_samples(48)
+        if not amplitudes:
+            return
+
+        center_y = self.track_audio_y + self.track_audio_h / 2
+        usable_height = max(6, self.track_audio_h - 10)
+        bar_spacing = max(3, clip_width / max(len(amplitudes), 1))
+        bar_width = max(2, min(6, int(bar_spacing * 0.5)))
+
+        baseline = self.scene.addLine(
+            clip_x,
+            center_y,
+            clip_x + clip_width,
+            center_y,
+            QPen(QColor(220, 255, 220, 60), 1),
+        )
+        self.audio_waveform_items.append(baseline)
+
+        for idx, amplitude in enumerate(amplitudes):
+            bar_height = max(2.0, amplitude * usable_height)
+            bar_x = clip_x + idx * bar_spacing + max(0, (bar_spacing - bar_width) / 2)
+            bar = self.scene.addRect(
+                bar_x,
+                center_y - bar_height / 2,
+                bar_width,
+                bar_height,
+                QPen(Qt.PenStyle.NoPen),
+                QBrush(QColor(220, 255, 220, 150)),
+            )
+            self.audio_waveform_items.append(bar)
+
+    def _get_audio_waveform_samples(self, sample_count: int):
+        audio_path = self.tutorial.audio_path if self.tutorial else None
+        if audio_path and os.path.exists(audio_path) and audio_path.lower().endswith(".wav"):
+            try:
+                with wave.open(audio_path, "rb") as wav_file:
+                    frame_count = wav_file.getnframes()
+                    channels = max(1, wav_file.getnchannels())
+                    raw_frames = wav_file.readframes(frame_count)
+                samples = np.frombuffer(raw_frames, dtype=np.int16)
+                if channels > 1:
+                    samples = samples.reshape(-1, channels).mean(axis=1)
+                if len(samples) > 0:
+                    trim_start, trim_end = self.get_audio_trim_bounds()
+                    source_duration = self.get_audio_source_duration() or 0.0
+                    if source_duration > 0:
+                        start_idx = int(max(0, min(len(samples), round((trim_start / source_duration) * len(samples)))))
+                        end_idx = int(max(start_idx + 1, min(len(samples), round((trim_end / source_duration) * len(samples)))))
+                        samples = samples[start_idx:end_idx]
+                    window_size = max(1, len(samples) // sample_count)
+                    amplitudes = []
+                    for start in range(0, len(samples), window_size):
+                        chunk = samples[start:start + window_size]
+                        if len(amplitudes) >= sample_count:
+                            break
+                        amplitudes.append(float(np.max(np.abs(chunk))) / 32767.0 if len(chunk) else 0.0)
+                    if amplitudes:
+                        return amplitudes
+            except Exception:
+                pass
+
+        # Fallback pattern so the audio clip remains readable even without a standalone wav file.
+        return [0.22, 0.38, 0.55, 0.31, 0.74, 0.46, 0.29, 0.62, 0.41, 0.68, 0.25, 0.52] * 4
 
     def refresh_step_items(self):
         if not self.tutorial:
@@ -1003,7 +1356,7 @@ class TimelineWidget(QWidget):
         if not self.playhead_line_item or not self.playhead_triangle_item:
             return
         pps = self.pixels_per_second * self.zoom_scale
-        playhead_x = int(self.current_position * pps)
+        playhead_x = self.scene_x_for_time(self.current_position)
         self.playhead_line_item.setLine(playhead_x, 0, playhead_x, self.total_height)
         self.playhead_triangle_item.setPos(playhead_x, 0)
         
@@ -1015,13 +1368,31 @@ class TimelineWidget(QWidget):
         self.update_playhead()
             
     def update_time_label(self):
-        # Time label was removed - just update zoom label if needed
-        pass
+        current = self.format_time(self.current_position)
+        total = self.format_time(self.video_duration)
+        range_text = ""
+        edit_range = self.get_edit_range()
+        if edit_range:
+            start, end = edit_range
+            range_text = f"  Range {self.format_time(start)}-{self.format_time(end)}"
+        elif self.edit_range_start is not None:
+            range_text = f"  In {self.format_time(self.edit_range_start)}"
+        elif self.edit_range_end is not None:
+            range_text = f"  Out {self.format_time(self.edit_range_end)}"
+        self.time_label.setText(f"{current} / {total}{range_text}")
+        if self.snap_temporarily_disabled:
+            self.snap_label.setText("Snap Off (Alt)")
+            self.snap_label.setStyleSheet("color: #ffcc80; font-size: 11px; padding: 2px 6px;")
+        else:
+            self.snap_label.setText(f"Snap {self.current_snap_interval:.2f}s")
+            self.snap_label.setStyleSheet("color: #a5d6a7; font-size: 11px; padding: 2px 6px;")
         
     def format_time(self, seconds):
-        m = int(seconds) // 60
-        s = int(seconds) % 60
-        return f"{m:02d}:{s:02d}"
+        total_tenths = max(0, int(round(seconds * 10)))
+        m = total_tenths // 600
+        s = (total_tenths % 600) // 10
+        tenths = total_tenths % 10
+        return f"{m:02d}:{s:02d}.{tenths}"
         
     def toggle_play(self):
         if self.is_playing:
@@ -1040,7 +1411,7 @@ class TimelineWidget(QWidget):
             
             # Auto-scroll to keep playhead visible
             pps = self.pixels_per_second * self.zoom_scale
-            playhead_x = int(self.current_position * pps)
+            playhead_x = self.scene_x_for_time(self.current_position)
             self.view.ensureVisible(playhead_x, 50, 100, 50)
         else:
             self.toggle_play()
@@ -1112,26 +1483,22 @@ class TimelineWidget(QWidget):
         elif matches("frame_start"):
             # Go to start
             self.current_position = 0
+            self.update_time_label()
             self.position_changed.emit(self.current_position)
             self.update_playhead()
             event.accept()
         elif matches("frame_end"):
             # Go to end
             self.current_position = self.video_duration
+            self.update_time_label()
             self.position_changed.emit(self.current_position)
             self.update_playhead()
             event.accept()
         elif matches("frame_prev"):
-            # Move back 1 second
-            self.current_position = max(0, self.current_position - 1.0)
-            self.position_changed.emit(self.current_position)
-            self.update_playhead()
+            self.move_playhead(-0.1)
             event.accept()
         elif matches("frame_next"):
-            # Move forward 1 second
-            self.current_position = min(self.video_duration, self.current_position + 1.0)
-            self.position_changed.emit(self.current_position)
-            self.update_playhead()
+            self.move_playhead(0.1)
             event.accept()
         else:
             super().keyPressEvent(event)
@@ -1150,8 +1517,13 @@ class TimelineGraphicsView(QGraphicsView):
         
         # Drag state
         self.dragging_step = None
+        self.dragging_audio = False
+        self.dragging_audio_handle = None
         self.drag_start_x = 0
         self.drag_original_timestamp = 0
+        self.drag_original_audio_offset = 0.0
+        self.drag_original_audio_trim_start = 0.0
+        self.drag_original_audio_trim_end = None
         
         # Clipboard for copy/paste
         self.clipboard_step = None
@@ -1171,12 +1543,24 @@ class TimelineGraphicsView(QGraphicsView):
             
     def mousePressEvent(self, event):
         scene_pos = self.mapToScene(event.position().toPoint())
-        pps = self.timeline_widget.pixels_per_second * self.timeline_widget.zoom_scale
+        self.timeline_widget.snap_temporarily_disabled = bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
+        self.timeline_widget.update_time_label()
         
         if event.button() == Qt.MouseButton.LeftButton:
             # Check if clicking on a step clip
             item = self.itemAt(event.position().toPoint())
-            if item and item.data(0) is not None:
+            handle_role = item.data(2) if item else None
+            if handle_role in {"audio_handle_left", "audio_handle_right"}:
+                self.dragging_audio_handle = handle_role
+                self.drag_start_x = scene_pos.x()
+                self.drag_original_audio_offset = float(getattr(self.timeline_widget.tutorial, "audio_offset", 0.0) or 0.0)
+                self.drag_original_audio_trim_start = float(getattr(self.timeline_widget.tutorial, "audio_trim_start", 0.0) or 0.0)
+                self.drag_original_audio_trim_end = getattr(self.timeline_widget.tutorial, "audio_trim_end", None)
+            elif item and item.data(1) == "audio":
+                self.dragging_audio = True
+                self.drag_start_x = scene_pos.x()
+                self.drag_original_audio_offset = float(getattr(self.timeline_widget.tutorial, "audio_offset", 0.0) or 0.0)
+            elif item and item.data(0) is not None:
                 step_idx = item.data(0)
                 self.timeline_widget.selected_step_index = step_idx
                 self.timeline_widget.step_selected.emit(step_idx)
@@ -1191,29 +1575,90 @@ class TimelineGraphicsView(QGraphicsView):
                 # Clicked on empty area - deselect and move playhead
                 self.timeline_widget.selected_step_index = -1
                 self.dragging_step = None
+                self.dragging_audio = False
                 self.timeline_widget.refresh_step_items()
-                position = scene_pos.x() / pps
+                position = self.timeline_widget.time_for_scene_x(scene_pos.x())
                 self.timeline_widget.on_timeline_clicked(position)
                 
         super().mousePressEvent(event)
         
     def mouseMoveEvent(self, event):
-        if self.dragging_step is not None:
+        self.timeline_widget.snap_temporarily_disabled = bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
+        if self.dragging_audio_handle:
+            scene_pos = self.mapToScene(event.position().toPoint())
+            delta_seconds = self.timeline_widget.snap_time(
+                self.timeline_widget.time_for_scene_x(scene_pos.x()) - self.timeline_widget.time_for_scene_x(self.drag_start_x)
+            )
+            source_duration = self.timeline_widget.get_audio_source_duration()
+            min_duration = self.timeline_widget.minimum_audio_clip_duration
+
+            if self.dragging_audio_handle == "audio_handle_left":
+                max_trim_start = (
+                    float(self.drag_original_audio_trim_end) - min_duration
+                    if self.drag_original_audio_trim_end is not None
+                    else max(0.0, (source_duration or (self.drag_original_audio_trim_start + max(self.timeline_widget.video_duration, 1.0))) - min_duration)
+                )
+                new_trim_start = min(max(0.0, self.drag_original_audio_trim_start + delta_seconds), max_trim_start)
+                applied_delta = new_trim_start - self.drag_original_audio_trim_start
+                self.timeline_widget.tutorial.audio_trim_start = new_trim_start
+                self.timeline_widget.tutorial.audio_offset = self.drag_original_audio_offset + applied_delta
+            else:
+                base_end = self.drag_original_audio_trim_end
+                if base_end is None:
+                    base_end = source_duration if source_duration is not None else (
+                        self.drag_original_audio_trim_start + self.timeline_widget.get_effective_audio_duration()
+                    )
+                max_trim_end = source_duration if source_duration is not None else max(base_end, self.drag_original_audio_trim_start + max(self.timeline_widget.video_duration, 1.0))
+                min_trim_end = float(getattr(self.timeline_widget.tutorial, "audio_trim_start", 0.0) or 0.0) + min_duration
+                new_trim_end = min(max_trim_end, max(min_trim_end, float(base_end) + delta_seconds))
+                self.timeline_widget.tutorial.audio_trim_end = new_trim_end
+
+            self.timeline_widget._update_audio_item()
+            self.timeline_widget.update_time_label()
+            self.timeline_widget.audio_trim_preview.emit()
+        elif self.dragging_audio:
             scene_pos = self.mapToScene(event.position().toPoint())
             pps = self.timeline_widget.pixels_per_second * self.timeline_widget.zoom_scale
+            delta_seconds = (scene_pos.x() - self.drag_start_x) / pps
+            new_offset = self.timeline_widget.snap_time(self.drag_original_audio_offset + delta_seconds)
+            new_offset = max(-10.0, min(10.0, new_offset))
+            self.timeline_widget.tutorial.audio_offset = new_offset
+            self.timeline_widget._update_audio_item()
+            self.timeline_widget.update_time_label()
+            self.timeline_widget.audio_offset_preview.emit(new_offset)
+        elif self.dragging_step is not None:
+            scene_pos = self.mapToScene(event.position().toPoint())
             
             # Calculate new timestamp
-            new_timestamp = max(0, scene_pos.x() / pps)
+            new_timestamp = self.timeline_widget.snap_time(self.timeline_widget.time_for_scene_x(scene_pos.x()))
+            new_timestamp = max(0, new_timestamp)
             
             # Update step timestamp
             if 0 <= self.dragging_step < len(self.timeline_widget.tutorial.steps):
                 self.timeline_widget.tutorial.steps[self.dragging_step].timestamp = new_timestamp
                 self.timeline_widget._update_step_item(self.dragging_step)
+        else:
+            item = self.itemAt(event.position().toPoint())
+            handle_role = item.data(2) if item else None
+            if handle_role in {"audio_handle_left", "audio_handle_right"}:
+                self.setCursor(Qt.CursorShape.SizeHorCursor)
+            elif item and item.data(1) == "audio":
+                self.setCursor(Qt.CursorShape.OpenHandCursor)
+            else:
+                self.setCursor(Qt.CursorShape.ArrowCursor)
                 
         super().mouseMoveEvent(event)
         
     def mouseReleaseEvent(self, event):
-        if self.dragging_step is not None:
+        if self.dragging_audio_handle:
+            self.timeline_widget.audio_trim_committed.emit()
+            self.timeline_widget.rebuild_scene()
+            self.dragging_audio_handle = None
+        elif self.dragging_audio:
+            self.timeline_widget.audio_offset_committed.emit(self.timeline_widget.tutorial.audio_offset)
+            self.timeline_widget.rebuild_scene()
+            self.dragging_audio = False
+        elif self.dragging_step is not None:
             # Re-sort steps by timestamp after drag
             self.timeline_widget.tutorial.steps.sort(key=lambda s: s.timestamp)
             self.timeline_widget.rebuild_scene()
@@ -1222,6 +1667,9 @@ class TimelineGraphicsView(QGraphicsView):
             self.timeline_widget.steps_reordered.emit()
             
             self.dragging_step = None
+        self.timeline_widget.snap_temporarily_disabled = False
+        self.timeline_widget.update_time_label()
+        self.setCursor(Qt.CursorShape.ArrowCursor)
             
         super().mouseReleaseEvent(event)
         
@@ -1233,7 +1681,10 @@ class TimelineGraphicsView(QGraphicsView):
         
         # Check if right-clicked on a step
         item = self.itemAt(pos)
-        step_idx = item.data(0) if item and item.data(0) is not None else None
+        if item and item.data(1) == "audio":
+            step_idx = None
+        else:
+            step_idx = item.data(0) if item and item.data(0) is not None else None
         
         if step_idx is not None and 0 <= step_idx < len(self.timeline_widget.tutorial.steps):
             step = self.timeline_widget.tutorial.steps[step_idx]
@@ -1444,6 +1895,10 @@ class Editor(QMainWindow):
         
         # Action Buttons
         btn_layout = QHBoxLayout()
+        self.btn_import_images = QPushButton("Import Images")
+        self.btn_import_images.clicked.connect(self.import_images)
+        self.btn_import_images.setStyleSheet("QPushButton { background: #2E7D32; color: white; border: none; padding: 5px; border-radius: 4px; } QPushButton:hover { background: #256628; }")
+        
         self.btn_duplicate = QPushButton("Duplicate")
         self.btn_duplicate.clicked.connect(self.duplicate_current_step)
         self.btn_duplicate.setStyleSheet("QPushButton { background: #0078D4; color: white; border: none; padding: 5px; border-radius: 4px; } QPushButton:hover { background: #106EBE; }")
@@ -1452,6 +1907,7 @@ class Editor(QMainWindow):
         self.btn_delete.clicked.connect(self.delete_current_step)
         self.btn_delete.setStyleSheet("QPushButton { background: #D93025; color: white; border: none; padding: 5px; border-radius: 4px; } QPushButton:hover { background: #C5221F; }")
         
+        btn_layout.addWidget(self.btn_import_images)
         btn_layout.addWidget(self.btn_duplicate)
         btn_layout.addWidget(self.btn_delete)
         steps_layout.addLayout(btn_layout)
@@ -1643,6 +2099,9 @@ class Editor(QMainWindow):
         self.audio_input_combo = QComboBox()
         self.audio_input_combo.currentIndexChanged.connect(self.update_audio_input_selection)
         audio_input_layout.addWidget(self.audio_input_combo, 1)
+        self.btn_test_audio_input = QPushButton("Test Mic")
+        self.btn_test_audio_input.clicked.connect(self.test_audio_input)
+        audio_input_layout.addWidget(self.btn_test_audio_input)
         self.btn_refresh_audio_inputs = QPushButton("Refresh Inputs")
         self.btn_refresh_audio_inputs.clicked.connect(self.refresh_audio_inputs)
         audio_input_layout.addWidget(self.btn_refresh_audio_inputs)
@@ -1722,6 +2181,12 @@ class Editor(QMainWindow):
         self.timeline.step_added_with_type.connect(self.on_add_step) # Handle both
         self.timeline.step_deleted.connect(self.on_delete_step)
         self.timeline.steps_reordered.connect(self.on_steps_reordered)
+        self.timeline.split_requested.connect(self.split_at_playhead)
+        self.timeline.delete_gap_requested.connect(self.delete_selected_range)
+        self.timeline.audio_offset_preview.connect(self.preview_audio_offset_from_timeline)
+        self.timeline.audio_offset_committed.connect(self.commit_audio_offset_from_timeline)
+        self.timeline.audio_trim_preview.connect(self.preview_audio_trim_from_timeline)
+        self.timeline.audio_trim_committed.connect(self.commit_audio_trim_from_timeline)
         
         self.timeline_dock.setWidget(self.timeline)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.timeline_dock)
@@ -1777,6 +2242,162 @@ class Editor(QMainWindow):
         self.refresh()
         self.save_state()
 
+    def import_images(self):
+        image_paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Import Screenshots",
+            "",
+            "Images (*.png *.jpg *.jpeg *.bmp *.webp);;All Files (*)",
+        )
+        if not image_paths:
+            return
+
+        has_existing_content = bool(
+            self.tutorial.steps or
+            (self.tutorial.video_path and os.path.exists(self.tutorial.video_path)) or
+            self.tutorial.audio_path
+        )
+        if has_existing_content:
+            result = QMessageBox.question(
+                self,
+                "Replace Current Tutorial?",
+                "Importing screenshots will replace the current steps, video, and audio for this tutorial. Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if result != QMessageBox.StandardButton.Yes:
+                return
+
+        imported_count = self.import_image_sequence(image_paths)
+        if imported_count:
+            QMessageBox.information(
+                self,
+                "Images Imported",
+                f"Imported {imported_count} screenshots as tutorial steps.",
+            )
+
+    def import_image_sequence(self, image_paths):
+        normalized_paths = []
+        for path in image_paths:
+            if path and os.path.exists(path):
+                normalized_paths.append(os.path.abspath(path))
+
+        if not normalized_paths:
+            return 0
+
+        if self.video_cap is not None:
+            self.video_cap.release()
+            self.video_cap = None
+
+        self.tutorial.steps = []
+        self.tutorial.video_path = None
+        self.tutorial.audio_path = None
+        self.tutorial.audio_offset = 0.0
+        self.tutorial.audio_trim_start = 0.0
+        self.tutorial.audio_trim_end = None
+
+        imported_steps = []
+        for index, image_path in enumerate(normalized_paths):
+            image = QImage(image_path)
+            image_width = image.width() if not image.isNull() else 0
+            image_height = image.height() if not image.isNull() else 0
+
+            hitbox_width = max(50, min(160, image_width // 4)) if image_width > 0 else 120
+            hitbox_height = max(50, min(100, image_height // 5)) if image_height > 0 else 80
+            hitbox_x = max(0, (image_width - hitbox_width) // 2) if image_width > 0 else 100
+            hitbox_y = max(0, (image_height - hitbox_height) // 2) if image_height > 0 else 100
+
+            step_name = os.path.splitext(os.path.basename(image_path))[0].replace("_", " ").replace("-", " ").strip()
+            description = step_name or f"Step {index + 1}"
+
+            imported_steps.append(
+                Step(
+                    image_path=image_path,
+                    action_type="click",
+                    click_button="left",
+                    x=hitbox_x,
+                    y=hitbox_y,
+                    width=hitbox_width,
+                    height=hitbox_height,
+                    description=description,
+                    instruction="Click the highlighted area",
+                    timestamp=float(index),
+                )
+            )
+
+        self.tutorial.steps = imported_steps
+        self.view_mode = "screenshot"
+        self.timeline.current_position = 0.0
+        self.timeline.set_tutorial(self.tutorial)
+        self._sync_audio_ui()
+        self.refresh()
+        if self.tutorial.steps:
+            self.set_current_step(0)
+        self.save_state()
+        return len(imported_steps)
+
+    def split_at_playhead(self):
+        """Duplicate a nearby step at the current playhead to create an edit split point."""
+        import copy
+        import uuid
+
+        if not self.tutorial.steps:
+            self.on_add_step(self.timeline.current_position, "click")
+            return
+
+        selected_index = self.timeline.selected_step_index
+        if not (0 <= selected_index < len(self.tutorial.steps)):
+            selected_index = min(
+                range(len(self.tutorial.steps)),
+                key=lambda idx: abs(self.tutorial.steps[idx].timestamp - self.timeline.current_position),
+            )
+
+        source_step = self.tutorial.steps[selected_index]
+        new_step = copy.deepcopy(source_step)
+        new_step.id = str(uuid.uuid4())
+        new_step.timestamp = self.timeline.current_position
+        self.tutorial.steps.append(new_step)
+        self.tutorial.steps.sort(key=lambda s: s.timestamp)
+
+        self.refresh()
+        actual_index = self.tutorial.steps.index(new_step)
+        self.set_current_step(actual_index)
+        self.timeline.rebuild_scene()
+        self.save_state()
+
+    def delete_selected_range(self, ripple: bool = False):
+        """Delete steps inside the marked range and optionally close the gap."""
+        edit_range = self.timeline.get_edit_range()
+        if not edit_range:
+            return
+
+        start, end = edit_range
+        duration = end - start
+        kept_steps = []
+        for step in self.tutorial.steps:
+            if start <= step.timestamp <= end:
+                continue
+            if ripple and step.timestamp > end:
+                step.timestamp = max(start, step.timestamp - duration)
+            kept_steps.append(step)
+
+        self.tutorial.steps = sorted(kept_steps, key=lambda s: s.timestamp)
+        self.timeline.current_position = start
+        self.timeline.clear_edit_range()
+        self.refresh()
+        if self.tutorial.steps:
+            nearest_index = min(
+                range(len(self.tutorial.steps)),
+                key=lambda idx: abs(self.tutorial.steps[idx].timestamp - start),
+            )
+            self.set_current_step(nearest_index)
+        else:
+            self.timeline.selected_step_index = -1
+            self.timeline.refresh_step_items()
+        self.timeline.rebuild_scene()
+        self.timeline.position_changed.emit(self.timeline.current_position)
+        self.save_state()
+
     def _create_property_section(self, section_key: str, title: str) -> CollapsibleSection:
         section = CollapsibleSection(title, self)
         self.property_sections[section_key] = {"title": title, "widget": section}
@@ -1805,16 +2426,18 @@ class Editor(QMainWindow):
             self.audio_input_combo.addItem("Mic unavailable: sounddevice missing", None)
             self.audio_input_combo.setEnabled(False)
             self.btn_refresh_audio_inputs.setEnabled(False)
+            self.btn_test_audio_input.setEnabled(False)
             self.audio_input_combo.blockSignals(False)
             return
 
         self.audio_input_combo.setEnabled(True)
         self.btn_refresh_audio_inputs.setEnabled(True)
+        self.btn_test_audio_input.setEnabled(True)
         self.audio_input_combo.addItem("Default Input [Windows Default]", None)
 
         for device in get_audio_input_devices():
             self.audio_input_combo.addItem(
-                f"{device['name']} ({device['channels']} ch)",
+                device.get("label") or f"{device['name']} ({device['channels']} ch)",
                 device["id"],
             )
 
@@ -1837,6 +2460,37 @@ class Editor(QMainWindow):
     def get_selected_audio_input(self):
         return self.audio_input_combo.currentData(), self.audio_input_combo.currentText()
 
+    def test_audio_input(self):
+        """Record and play back a short sample from the selected microphone."""
+        if not AUDIO_AVAILABLE:
+            return
+
+        from PySide6.QtWidgets import QMessageBox, QProgressDialog
+        from PySide6.QtCore import Qt, QCoreApplication
+        import winsound
+
+        device_id, device_name = self.get_selected_audio_input()
+        temp_dir = os.path.join(tempfile.gettempdir(), "tutomake")
+        sample_path = os.path.join(temp_dir, "mic_test.wav")
+
+        progress = QProgressDialog(f"Recording 3 second mic test from {device_name}...", None, 0, 0, self)
+        progress.setWindowTitle("Test Mic")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setCancelButton(None)
+        progress.show()
+        QCoreApplication.processEvents()
+
+        success, result = record_test_audio_clip(sample_path, device=device_id, duration=3.0)
+        progress.close()
+
+        if not success:
+            QMessageBox.warning(self, "Mic Test Failed", result)
+            return
+
+        winsound.PlaySound(result, winsound.SND_FILENAME)
+        QMessageBox.information(self, "Mic Test", f"Playback finished for:\n{device_name}")
+
     def _sync_audio_ui(self):
         """Synchronize audio controls with the current tutorial state."""
         self.refresh_audio_inputs()
@@ -1851,10 +2505,8 @@ class Editor(QMainWindow):
             self.audio_file_label.setStyleSheet("color: #666; font-style: italic;")
             self.remove_audio_btn.setEnabled(False)
 
-        self.audio_offset_slider.blockSignals(True)
-        self.audio_offset_slider.setValue(int(round(self.tutorial.audio_offset * 10)))
-        self.audio_offset_slider.blockSignals(False)
-        self.audio_offset_label.setText(f"{self.tutorial.audio_offset:+.1f}s")
+        self.sync_audio_controls_from_model()
+        self.timeline.rebuild_scene()
 
         self.tutorial_title_input.blockSignals(True)
         self.start_subtitle_input.blockSignals(True)
@@ -2284,10 +2936,9 @@ class Editor(QMainWindow):
         )
         if audio_path:
             self.tutorial.audio_path = audio_path
-            filename = os.path.basename(audio_path)
-            self.audio_file_label.setText(filename)
-            self.audio_file_label.setStyleSheet("color: #0a0; font-style: normal;")
-            self.remove_audio_btn.setEnabled(True)
+            self.tutorial.audio_trim_start = 0.0
+            self.tutorial.audio_trim_end = None
+            self._sync_audio_ui()
             self.save_state()
             print(f"Imported audio: {audio_path}")
     
@@ -2295,18 +2946,50 @@ class Editor(QMainWindow):
         """Remove the audio file from the tutorial."""
         self.tutorial.audio_path = None
         self.tutorial.audio_offset = 0.0
+        self.tutorial.audio_trim_start = 0.0
+        self.tutorial.audio_trim_end = None
         self.audio_file_label.setText("No audio loaded")
         self.audio_file_label.setStyleSheet("color: #666; font-style: italic;")
         self.remove_audio_btn.setEnabled(False)
         self.audio_offset_slider.setValue(0)
+        self.timeline.rebuild_scene()
         self.save_state()
         print("Audio removed")
     
     def update_audio_offset(self, value):
         """Update the audio sync offset."""
         offset_seconds = value / 10.0  # Slider value is in 0.1s units
-        self.audio_offset_label.setText(f"{offset_seconds:+.1f}s")
         self.tutorial.audio_offset = offset_seconds
+        self.sync_audio_controls_from_model()
+        self.timeline.rebuild_scene()
+        self.save_state()
+
+    def sync_audio_controls_from_model(self):
+        self.audio_offset_slider.blockSignals(True)
+        self.audio_offset_slider.setValue(int(round(self.tutorial.audio_offset * 10)))
+        self.audio_offset_slider.blockSignals(False)
+        trim_start = float(getattr(self.tutorial, "audio_trim_start", 0.0) or 0.0)
+        trim_end = getattr(self.tutorial, "audio_trim_end", None)
+        trim_suffix = ""
+        if trim_start > 0 or trim_end is not None:
+            trim_suffix = f"  Trim {trim_start:.1f}s"
+            if trim_end is not None:
+                trim_suffix += f"-{float(trim_end):.1f}s"
+        self.audio_offset_label.setText(f"{self.tutorial.audio_offset:+.1f}s{trim_suffix}")
+
+    def preview_audio_offset_from_timeline(self, offset_seconds: float):
+        self.tutorial.audio_offset = offset_seconds
+        self.sync_audio_controls_from_model()
+
+    def commit_audio_offset_from_timeline(self, offset_seconds: float):
+        self.preview_audio_offset_from_timeline(offset_seconds)
+        self.save_state()
+
+    def preview_audio_trim_from_timeline(self):
+        self.sync_audio_controls_from_model()
+
+    def commit_audio_trim_from_timeline(self):
+        self.preview_audio_trim_from_timeline()
         self.save_state()
 
     def pick_hitbox_line_color(self):
@@ -2507,6 +3190,8 @@ class Editor(QMainWindow):
             'video_path': self.tutorial.video_path,
             'audio_path': self.tutorial.audio_path,
             'audio_offset': self.tutorial.audio_offset,
+            'audio_trim_start': self.tutorial.audio_trim_start,
+            'audio_trim_end': self.tutorial.audio_trim_end,
         }
         
         self.history_stack.append(state)
@@ -2547,6 +3232,8 @@ class Editor(QMainWindow):
         self.tutorial.video_path = state['video_path']
         self.tutorial.audio_path = state.get('audio_path')
         self.tutorial.audio_offset = state.get('audio_offset', 0.0)
+        self.tutorial.audio_trim_start = state.get('audio_trim_start', 0.0)
+        self.tutorial.audio_trim_end = state.get('audio_trim_end')
         self._sync_audio_ui()
         self.refresh()
         self.timeline.update()

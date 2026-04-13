@@ -77,6 +77,38 @@ SPECIAL_KEY_DISPLAY = {
     "cmd": "Cmd",
 }
 
+SPECIAL_KEY_CODES = {
+    "esc": "Escape",
+    "enter": "Enter",
+    "delete": "Delete",
+    "backspace": "Backspace",
+    "tab": "Tab",
+    "space": "Space",
+    "up": "ArrowUp",
+    "down": "ArrowDown",
+    "left": "ArrowLeft",
+    "right": "ArrowRight",
+    "home": "Home",
+    "end": "End",
+    "pageup": "PageUp",
+    "pagedown": "PageDown",
+    "insert": "Insert",
+}
+
+CHARACTER_KEY_CODES = {
+    "`": "Backquote",
+    "-": "Minus",
+    "=": "Equal",
+    "[": "BracketLeft",
+    "]": "BracketRight",
+    "\\": "Backslash",
+    ";": "Semicolon",
+    "'": "Quote",
+    ",": "Comma",
+    ".": "Period",
+    "/": "Slash",
+}
+
 
 def normalize_key_name(value: str) -> str:
     if not value:
@@ -141,3 +173,43 @@ def display_key_combo(value: str) -> str:
     if not normalized:
         return ""
     return " + ".join(display_key_name(part) for part in normalized.split("+"))
+
+
+def normalize_key_code(value: str) -> str:
+    return (value or "").strip()
+
+
+def key_code_from_key_name(value: str) -> str:
+    normalized = normalize_key_name(value)
+    if not normalized:
+        return ""
+    if normalized in SPECIAL_KEY_CODES:
+        return SPECIAL_KEY_CODES[normalized]
+    if normalized.startswith("f") and normalized[1:].isdigit():
+        return normalized.upper()
+    if len(normalized) == 1 and normalized.isalpha():
+        return f"Key{normalized.upper()}"
+    if len(normalized) == 1 and normalized.isdigit():
+        return f"Digit{normalized}"
+    return CHARACTER_KEY_CODES.get(normalized, "")
+
+
+def key_code_from_char(char: str, vk: int | None = None) -> str:
+    normalized = normalize_key_name(char)
+    if not normalized:
+        return ""
+
+    if vk is not None:
+        if 96 <= vk <= 105:
+            return f"Numpad{vk - 96}"
+        keypad_codes = {
+            106: "NumpadMultiply",
+            107: "NumpadAdd",
+            109: "NumpadSubtract",
+            110: "NumpadDecimal",
+            111: "NumpadDivide",
+        }
+        if vk in keypad_codes:
+            return keypad_codes[vk]
+
+    return key_code_from_key_name(normalized)

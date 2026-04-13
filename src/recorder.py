@@ -2,15 +2,24 @@ import time
 import threading
 import math
 from typing import Callable, Optional
+from pathlib import Path
 from pynput import mouse, keyboard
 import mss
 import mss.tools
 from datetime import datetime
 import os
 import wave
+import re
 import cv2
 import numpy as np
-from .key_utils import display_key_combo, display_key_name, normalize_key_combo, normalize_key_name
+from .key_utils import (
+    display_key_combo,
+    display_key_name,
+    key_code_from_char,
+    key_code_from_key_name,
+    normalize_key_combo,
+    normalize_key_name,
+)
 from .model import Step, Tutorial
 
 # Audio recording support
@@ -23,23 +32,115 @@ except ImportError:
 
 
 def get_audio_input_devices():
-    """Return available input devices as dicts with id/name/channel info."""
+    """Return physical-looking input devices and hide obvious virtual/system capture endpoints."""
     if not AUDIO_AVAILABLE:
         return []
 
     devices = []
     try:
+        default_input = None
+        try:
+            default_devices = sd.default.device
+            if isinstance(default_devices, (list, tuple)) and len(default_devices) >= 1:
+                default_input = default_devices[0]
+        except Exception:
+            default_input = None
+
+        seen_names = set()
         for index, device in enumerate(sd.query_devices()):
             if device.get("max_input_channels", 0) <= 0:
                 continue
+            raw_name = device.get("name", f"Input {index}")
+            cleaned_name = _clean_audio_device_name(raw_name)
+            normalized_name = _normalize_audio_device_name(cleaned_name)
+            if normalized_name in seen_names:
+                continue
+            seen_names.add(normalized_name)
+
+            device_class = _classify_audio_device(cleaned_name)
+            label = _format_audio_device_label(
+                cleaned_name,
+                device_class,
+                int(device.get("max_input_channels", 0)),
+                is_default=(default_input == index),
+            )
             devices.append({
                 "id": index,
-                "name": device.get("name", f"Input {index}"),
+                "name": cleaned_name,
+                "label": label,
                 "channels": int(device.get("max_input_channels", 0)),
+                "kind": device_class,
             })
     except Exception as e:
         print(f"Failed to query audio devices: {e}")
-    return devices
+
+    filtered_devices = [
+        device for device in devices
+        if device.get("kind") not in {"Virtual", "System"}
+    ]
+    return filtered_devices or devices
+
+
+def _clean_audio_device_name(name: str) -> str:
+    cleaned = re.sub(r"\s*\((mme|wdm-ks|windows directsound|wasapi|asio)\)\s*$", "", name or "", flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*\b(input|output)\b\s*$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" -")
+    return cleaned or "Unknown Input"
+
+
+def _normalize_audio_device_name(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (name or "").lower())
+
+
+def _classify_audio_device(name: str) -> str:
+    lowered = (name or "").lower()
+    if any(token in lowered for token in ("cable", "virtual", "vb-audio", "voicemeter", "blackhole", "loopback")):
+        return "Virtual"
+    if any(token in lowered for token in ("stereo mix", "what u hear", "wave out")):
+        return "System"
+    if any(token in lowered for token in ("line in", "line-input", "aux", "spdif", "digital in")):
+        return "Line In"
+    if any(token in lowered for token in ("webcam", "camera", "usb", "mic", "microphone", "headset", "airpods", "bluetooth")):
+        return "Mic"
+    return "Input"
+
+
+def _format_audio_device_label(name: str, kind: str, channels: int, is_default: bool = False) -> str:
+    prefix = "[Recommended] " if is_default else ""
+    return f"{prefix}{name} [{kind}, {channels} ch]"
+
+
+def record_test_audio_clip(output_path: str, device=None, duration: float = 3.0):
+    """Record a short WAV clip from the selected input device for validation."""
+    if not AUDIO_AVAILABLE:
+        return False, "sounddevice is not installed."
+
+    try:
+        device_info = sd.query_devices(device, "input")
+        channels = min(2, int(device_info.get("max_input_channels", 0) or 1))
+        sample_rate = int(device_info.get("default_samplerate") or 44100)
+        frame_count = max(1, int(round(duration * sample_rate)))
+
+        audio_array = sd.rec(
+            frame_count,
+            samplerate=sample_rate,
+            channels=channels,
+            dtype="int16",
+            device=device,
+        )
+        sd.wait()
+
+        output_file = Path(output_path)
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        with wave.open(str(output_file), "wb") as wav_file:
+            wav_file.setnchannels(channels)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(sample_rate)
+            wav_file.writeframes(np.asarray(audio_array, dtype=np.int16).tobytes())
+        return True, str(output_file)
+    except Exception as e:
+        return False, str(e)
+
 
 class Recorder:
     def __init__(
@@ -79,6 +180,9 @@ class Recorder:
         self.audio_sample_rate = 44100
         self.audio_channels = 2
         self.audio_data = []
+        self.audio_start_delay = 0.0
+        self._audio_started_at = None
+        self._configure_audio_input()
         
         # Keyboard recording buffer
         self.key_buffer = ""
@@ -91,6 +195,25 @@ class Recorder:
         self.current_modifier_keys: set[str] = set()
         self.space_modifier_pending = False
         self.space_modifier_used = False
+
+    def _configure_audio_input(self):
+        """Match stream settings to the selected device to avoid distorted capture."""
+        if not AUDIO_AVAILABLE:
+            return
+
+        try:
+            device_info = sd.query_devices(self.audio_device, "input")
+        except Exception as e:
+            print(f"Falling back to default audio settings: {e}")
+            return
+
+        max_input_channels = int(device_info.get("max_input_channels", 0) or 0)
+        if max_input_channels > 0:
+            self.audio_channels = min(2, max_input_channels)
+
+        default_samplerate = device_info.get("default_samplerate")
+        if default_samplerate:
+            self.audio_sample_rate = int(default_samplerate)
 
     def start(self):
         if self.is_recording:
@@ -303,6 +426,9 @@ class Recorder:
         def audio_callback(indata, frames, time_info, status):
             if status:
                 print(f"Audio status: {status}")
+            if self._audio_started_at is None:
+                self._audio_started_at = time.time()
+                self.audio_start_delay = max(0.0, self._audio_started_at - self.start_time)
             self.audio_data.append(indata.copy())
         
         try:
@@ -324,6 +450,13 @@ class Recorder:
         try:
             # Combine all audio chunks
             audio_array = np.concatenate(self.audio_data, axis=0)
+
+            # Pad initial silence so audio lines up with video start.
+            if self.audio_start_delay > 0:
+                padding_frames = int(round(self.audio_start_delay * self.audio_sample_rate))
+                if padding_frames > 0:
+                    silence = np.zeros((padding_frames, self.audio_channels), dtype=audio_array.dtype)
+                    audio_array = np.concatenate([silence, audio_array], axis=0)
 
             # Convert float audio samples from sounddevice to 16-bit PCM WAV.
             if np.issubdtype(audio_array.dtype, np.floating):
@@ -614,6 +747,12 @@ class Recorder:
             return chr(ord('a') + ord(char) - 1)
         return char.lower()
 
+    def _key_code_from_event(self, key, fallback_name: str = "") -> str:
+        vk = getattr(key, "vk", None)
+        if hasattr(key, "char") and key.char:
+            return key_code_from_char(key.char, vk)
+        return key_code_from_key_name(fallback_name or getattr(key, "name", "") or "")
+
     def _insert_step_sorted(self, step: Step):
         insert_idx = 0
         for i, existing_step in enumerate(self.tutorial.steps):
@@ -661,7 +800,7 @@ class Recorder:
                     if self.key_buffer:
                         self._save_keyboard_step()
                     self._mark_modifier_keys_used(modifier_keys)
-                    self._save_key_combo_step(combo_char, modifier_keys)
+                    self._save_key_combo_step(combo_char, modifier_keys, key_code_from_char(char, vk))
                     return
                 
                 # Start buffer timing if this is the first key
@@ -677,9 +816,15 @@ class Recorder:
                     self._save_keyboard_step()
                     
             elif key == keyboard.Key.enter:
-                # Enter ends keyboard input
+                modifier_keys = self._current_modifier_list()
                 if self.key_buffer:
                     self._save_keyboard_step()
+                    return
+                if modifier_keys:
+                    self._mark_modifier_keys_used(modifier_keys)
+                    self._save_key_combo_step("enter", modifier_keys, self._key_code_from_event(key, "enter"))
+                    return
+                self._save_special_key_step("enter", self._key_code_from_event(key, "enter"))
                     
             elif key == keyboard.Key.backspace:
                 # Allow backspace to correct input
@@ -693,33 +838,33 @@ class Recorder:
                     if self.key_buffer:
                         self._save_keyboard_step()
                     self._mark_modifier_keys_used(modifier_keys)
-                    self._save_key_combo_step("delete", modifier_keys)
+                    self._save_key_combo_step("delete", modifier_keys, self._key_code_from_event(key, "delete"))
                     return
                 if self.key_buffer:
                     self._save_keyboard_step()
-                self._save_special_key_step("delete")
+                self._save_special_key_step("delete", self._key_code_from_event(key, "delete"))
             elif key == keyboard.Key.tab:
                 modifier_keys = self._current_modifier_list()
                 if modifier_keys:
                     if self.key_buffer:
                         self._save_keyboard_step()
                     self._mark_modifier_keys_used(modifier_keys)
-                    self._save_key_combo_step("tab", modifier_keys)
+                    self._save_key_combo_step("tab", modifier_keys, self._key_code_from_event(key, "tab"))
                     return
                 if self.key_buffer:
                     self._save_keyboard_step()
-                self._save_special_key_step("tab")
+                self._save_special_key_step("tab", self._key_code_from_event(key, "tab"))
             elif key == keyboard.Key.esc:
                 modifier_keys = self._current_modifier_list()
                 if modifier_keys:
                     if self.key_buffer:
                         self._save_keyboard_step()
                     self._mark_modifier_keys_used(modifier_keys)
-                    self._save_key_combo_step("esc", modifier_keys)
+                    self._save_key_combo_step("esc", modifier_keys, self._key_code_from_event(key, "esc"))
                     return
                 if self.key_buffer:
                     self._save_keyboard_step()
-                self._save_special_key_step("esc")
+                self._save_special_key_step("esc", self._key_code_from_event(key, "esc"))
             elif hasattr(key, 'name') and key.name:
                 # Handle F-keys and arrow keys
                 key_name = key.name
@@ -729,22 +874,22 @@ class Recorder:
                         if self.key_buffer:
                             self._save_keyboard_step()
                         self._mark_modifier_keys_used(modifier_keys)
-                        self._save_key_combo_step(key_name, modifier_keys)
+                        self._save_key_combo_step(key_name, modifier_keys, self._key_code_from_event(key, key_name))
                         return
                     if self.key_buffer:
                         self._save_keyboard_step()
-                    self._save_special_key_step(key_name)
+                    self._save_special_key_step(key_name, self._key_code_from_event(key, key_name))
                 elif key_name in ['up', 'down', 'left', 'right']:
                     modifier_keys = self._current_modifier_list()
                     if modifier_keys:
                         if self.key_buffer:
                             self._save_keyboard_step()
                         self._mark_modifier_keys_used(modifier_keys)
-                        self._save_key_combo_step(key_name, modifier_keys)
+                        self._save_key_combo_step(key_name, modifier_keys, self._key_code_from_event(key, key_name))
                         return
                     if self.key_buffer:
                         self._save_keyboard_step()
-                    self._save_special_key_step(key_name)
+                    self._save_special_key_step(key_name, self._key_code_from_event(key, key_name))
                     
         except AttributeError:
             pass  # Special keys we don't handle
@@ -765,9 +910,9 @@ class Recorder:
             self.space_modifier_used = False
             if should_emit_space:
                 if combo_modifiers:
-                    self._save_key_combo_step("space", combo_modifiers)
+                    self._save_key_combo_step("space", combo_modifiers, key_code_from_key_name("space"))
                 else:
-                    self._save_special_key_step("space")
+                    self._save_special_key_step("space", key_code_from_key_name("space"))
     
     def _get_current_video_time(self):
         """Get current video timestamp based on frame count."""
@@ -809,7 +954,7 @@ class Recorder:
         if self.on_step_callback:
             self.on_step_callback(step)
     
-    def _save_special_key_step(self, key_name):
+    def _save_special_key_step(self, key_name, key_code=""):
         """Save a special key press as a keyboard step."""
         timestamp = self._get_current_video_time()
         normalized_key_name = normalize_key_name(key_name)
@@ -820,6 +965,7 @@ class Recorder:
             y=100,
             description=f"Press {display_key_name(normalized_key_name)}",
             keyboard_input=normalized_key_name,
+            keyboard_code=key_code or key_code_from_key_name(normalized_key_name),
             keyboard_mode="key",
             timestamp=timestamp
         )
@@ -837,7 +983,7 @@ class Recorder:
         if self.on_step_callback:
             self.on_step_callback(step)
 
-    def _save_key_combo_step(self, key_name, modifier_keys):
+    def _save_key_combo_step(self, key_name, modifier_keys, key_code=""):
         timestamp = self._get_current_video_time()
         combo = normalize_key_combo("+".join([*modifier_keys, key_name]))
 
@@ -847,6 +993,7 @@ class Recorder:
             y=100,
             description=f"Press {display_key_combo(combo)}",
             keyboard_input=combo,
+            keyboard_code=key_code or key_code_from_key_name(key_name),
             keyboard_mode="key",
             timestamp=timestamp
         )

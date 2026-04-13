@@ -1,18 +1,108 @@
-## 2026-03-19 Step Instruction 기능 추가
+# TutoMake Worklog
 
-- **Request**: 튜토리얼 내보내기 시 히트박스에 대한 상세 지시사항(instruction) 입력 기능 추가
-- **Scope**: model, editor, player, web/document exporters
-- **Implemented**:
-  - `model.py`: Step에 `instruction: str = ""` 필드 추가
-  - `editor.py`: Properties 패널에 멀티라인 Instruction 입력란 추가 (QTextEdit, 80px 높이)
-  - `player.py`: 히트박스 설명 박스에서 instruction 우선 표시 + 동적 박스 크기 조정
-  - `web_exporter.py`: HTML/Video HTML step data에 instruction 포함, 헤더에 instruction 표시 영역 추가
-  - `document_exporter.py`: Markdown(인용 블록), PDF(이탤릭), PPTX(이탤릭 텍스트박스)에 instruction 추가
-- **Validation**: 코드 변경 사항 리뷰 완료 (자동화 테스트 없음, GUI 기반 수동 테스트 필요)
-- **Files**:
+## 2026-03-19 Step Instruction
+
+- Request: Add per-step detailed `instruction` text for editor/player/export flows.
+- Scope: `model`, `editor`, `player`, `web_exporter`, `document_exporter`
+- Implemented:
+  - Added `instruction: str = ""` to `Step`
+  - Added instruction input UI in editor
+  - Show instruction in player when present
+  - Included instruction in web/video HTML export
+  - Included instruction in markdown/PDF/PPTX export paths
+- Files:
   - `src/model.py`
   - `src/ui/editor.py`
   - `src/ui/player.py`
   - `src/exporters/web_exporter.py`
   - `src/exporters/document_exporter.py`
-- **Notes**: 기존 `.tutomake` 파일과 하위 호환성 유지 (instruction 기본값 빈 문자열)
+- Notes:
+  - Existing `.tutomake` files remain compatible because `instruction` defaults to empty
+
+## 2026-04-09 Timeline / Audio Editing Follow-up
+
+- Request: Improve post-recording timeline editing, audio input handling, sync adjustment, and export audio sync.
+- Implemented:
+  - `src/ui/editor.py`
+    - Enlarged timeline action buttons
+    - Added timeline time readout and marked range display
+    - Added `Split`, `Delete Gap`, `Ripple Delete`
+    - Added `A1` audio clip rendering on timeline
+    - Added draggable timeline-based `audio_offset` editing
+    - Added real `A1` left/right trim handle editing
+    - Added lightweight waveform bars on `A1`
+    - Added zoom-based snapping and temporary snap disable with `Alt`
+    - Added visible audio clip handles on `A1`
+    - Added `Test Mic` button in Audio settings
+  - `src/recorder.py`
+    - Matched recording sample rate / channel count to selected device
+    - Added initial silence padding based on actual audio start delay
+    - Added short mic test recording helper
+    - Simplified input device list to hide obvious virtual/system capture devices
+  - `src/exporters/video_exporter.py`
+    - Export now muxes audio back into rendered video
+    - External audio path now applies `audio_offset` during mux
+    - External audio mux now applies `audio_trim_start` / `audio_trim_end`
+- `src/model.py`
+  - Added tutorial-level `audio_trim_start` / `audio_trim_end`
+- `src/ui/player.py`
+  - Player now starts trimmed audio from the correct source position
+  - Player stops audio at the trimmed end point
+- Validation:
+  - Command: `python -m pytest -q`
+  - Final result in this session: `28 passed`
+- Current state:
+  - `A1` clip can be dragged left/right to adjust sync offset
+  - `A1` left/right handles now trim the usable audio region
+  - `Alt` while dragging temporarily disables snapping
+  - Exported MP4/WebM/AVI now include audio mux logic
+  - `Test Mic` records 3 seconds and plays back immediately
+- Next recommended step:
+  - If export sync still feels off, measure actual lead/lag in exported file and add explicit export-side calibration
+  - Consider surfacing numeric trim fields in the Audio panel for exact value entry/reset
+
+## 2026-04-14 HTML Export Prompt Removal / Key Code Distinction
+
+- Request:
+  - Remove the top step prompt popup from exported HTML/video HTML because guidance will come from a text box instead.
+  - Distinguish `Space` from `Enter` during recording and playback/export so CAD-style "Space acts like Enter" apps do not cause incorrect tutorial matching.
+  - Rebuild the Windows executable after the change.
+- Implemented:
+  - `src/exporters/web_exporter.py`
+    - Removed exported top header/prompt UI (`stepBadge` / `stepDesc` / `stepInstruction`) from both screenshot HTML and video HTML.
+    - Kept progress bar and mouse/drag overlays active.
+    - Added `keyboard_code` to serialized step data for HTML export.
+    - Updated exported keyboard matching logic to prefer physical key code matching over key-name-only matching.
+    - Prevented `Space` and `Enter` from being treated as interchangeable in exported tutorials.
+  - `src/key_utils.py`
+    - Added key-name to physical key-code mapping helpers.
+    - Added keypad/numpad code mapping support for recorded character keys.
+  - `src/model.py`
+    - Added `keyboard_code: str = ""` to `Step`.
+    - Added compatibility fallback so existing tutorials infer `keyboard_code` from `keyboard_input` when possible.
+  - `src/recorder.py`
+    - Recording now stores `keyboard_code` for special keys and key-combo steps.
+    - Added explicit capture for `Enter` as a special key step when appropriate.
+    - `Space` and `Enter` now persist with distinct codes (`Space`, `Enter`).
+  - `src/ui/player.py`
+    - Player now uses `keyboard_code` first when validating special key/key-combo steps.
+    - `Space` step no longer passes with `Enter`, and vice versa.
+- Validation:
+  - Command: `python -m pytest tests\test_regressions.py -k "html_exports_do_not_render_header_instruction_text or special_key_prompt or safe_resume_and_right_click_handler"`
+  - Result: `2 passed`
+  - Command: `python -m pytest tests\test_regressions.py -k "space_as_special_key_step or ctrl_space_as_key_combo or enter_as_special_key_step_with_distinct_code or special_key_prompt or player_distinguishes_space_and_enter"`
+  - Result: `4 passed`
+- Build:
+  - Command: `.venv\Scripts\python.exe -m PyInstaller --clean --noconfirm TutoMake.spec`
+  - Output: `dist\TutoMake.exe`
+- Files touched in this follow-up:
+  - `src/exporters/web_exporter.py`
+  - `src/key_utils.py`
+  - `src/model.py`
+  - `src/recorder.py`
+  - `src/ui/player.py`
+  - `tests/test_regressions.py`
+  - `ANTIGRAVITY_WORKLOG.md`
+- Next recommended step:
+  - Re-record and re-export one CAD tutorial that uses `Space` as confirm to validate the real workflow end-to-end.
+  - If users need it, consider exposing `keyboard_code`/display override in the editor so `Enter` vs `NumpadEnter` can also be controlled intentionally.

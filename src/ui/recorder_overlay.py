@@ -18,6 +18,7 @@ class RecorderOverlay(QWidget):
         self.setWindowTitle("Recorder")
         self.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         
         # Position at center-top of screen
@@ -130,6 +131,7 @@ class RecorderOverlay(QWidget):
             Qt.WindowType.Tool
         )
         self.countdown_widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.countdown_widget.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.countdown_widget.setStyleSheet("""
             QLabel {
                 color: white;
@@ -179,8 +181,6 @@ class RecorderOverlay(QWidget):
             self.recorder.start()
             self.show_recording_state()
             self.show()
-            self.setFocus()
-            self.activateWindow()
     
     def hide_for_capture(self):
         self.hide()

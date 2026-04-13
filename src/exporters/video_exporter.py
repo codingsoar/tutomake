@@ -3,6 +3,10 @@ Video Exporter Module
 Exports tutorials to MP4, GIF, WebM, AVI/MOV formats
 """
 import os
+import shutil
+import subprocess
+import tempfile
+import wave
 import cv2
 import numpy as np
 from typing import Callable, Optional
@@ -19,18 +23,46 @@ class VideoExporter:
     
     def export_mp4(self, output_path: str, fps: float = 24.0) -> bool:
         """Export as MP4 (H.264)."""
-        return self._export_video(output_path, 'mp4v', fps)
+        return self._export_video(output_path, 'mp4v', fps, "mp4")
     
     def export_webm(self, output_path: str, fps: float = 24.0) -> bool:
         """Export as WebM (VP8)."""
-        return self._export_video(output_path, 'VP80', fps)
+        return self._export_video(output_path, 'VP80', fps, "webm")
     
     def export_avi(self, output_path: str, fps: float = 24.0) -> bool:
         """Export as AVI (MJPG)."""
-        return self._export_video(output_path, 'MJPG', fps)
+        return self._export_video(output_path, 'MJPG', fps, "avi")
     
-    def _export_video(self, output_path: str, codec: str, fps: float) -> bool:
-        """Internal method to export video with hitbox overlays."""
+    def _export_video(self, output_path: str, codec: str, fps: float, container: str) -> bool:
+        """Render overlay video and mux tutorial audio when available."""
+        audio_source, external_audio = self._resolve_audio_source()
+        temp_output = output_path
+        if audio_source:
+            fd, temp_output = tempfile.mkstemp(
+                suffix=f".{container}",
+                dir=os.path.dirname(output_path) or None,
+            )
+            os.close(fd)
+
+        success = self._render_overlay_video(temp_output, codec, fps)
+        if not success:
+            if audio_source and os.path.exists(temp_output):
+                os.remove(temp_output)
+            return False
+
+        if not audio_source:
+            return True
+
+        muxed = self._mux_audio_track(temp_output, output_path, audio_source, external_audio, container)
+        if os.path.exists(temp_output):
+            if muxed:
+                os.remove(temp_output)
+            else:
+                shutil.move(temp_output, output_path)
+        return True
+
+    def _render_overlay_video(self, output_path: str, codec: str, fps: float) -> bool:
+        """Internal method to render video frames with hitbox overlays."""
         if not self.tutorial.video_path or not os.path.exists(self.tutorial.video_path):
             print("No video file to export")
             return False
@@ -91,6 +123,96 @@ class VideoExporter:
         
         print(f"Exported video to: {output_path}")
         return True
+
+    def _resolve_audio_source(self):
+        if self.tutorial.audio_path and os.path.exists(self.tutorial.audio_path):
+            return self.tutorial.audio_path, True
+        if self.tutorial.video_path and os.path.exists(self.tutorial.video_path):
+            return self.tutorial.video_path, False
+        return None, False
+
+    def _mux_audio_track(self, video_input: str, output_path: str, audio_source: str, external_audio: bool, container: str) -> bool:
+        try:
+            import imageio_ffmpeg
+            ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+        except Exception as e:
+            print(f"Audio mux skipped: {e}")
+            return False
+
+        command = self._build_audio_mux_command(
+            ffmpeg_path,
+            video_input,
+            output_path,
+            audio_source,
+            external_audio,
+            container,
+        )
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"Audio mux failed: {result.stderr}")
+            return False
+        return True
+
+    def _build_audio_mux_command(
+        self,
+        ffmpeg_path: str,
+        video_input: str,
+        output_path: str,
+        audio_source: str,
+        external_audio: bool,
+        container: str,
+    ):
+        command = [ffmpeg_path, "-y", "-i", video_input, "-i", audio_source]
+        if external_audio:
+            filter_name = "aout"
+            offset = float(getattr(self.tutorial, "audio_offset", 0.0) or 0.0)
+            trim_start = max(0.0, float(getattr(self.tutorial, "audio_trim_start", 0.0) or 0.0))
+            trim_end = getattr(self.tutorial, "audio_trim_end", None)
+            trim_parts = []
+            if trim_start > 0:
+                trim_parts.append(f"start={trim_start:.3f}")
+            if trim_end is not None:
+                trim_parts.append(f"end={max(trim_start, float(trim_end)):.3f}")
+
+            filters = []
+            if trim_parts:
+                filters.append(f"atrim={':'.join(trim_parts)}")
+            if offset > 0:
+                delay_ms = int(round(offset * 1000))
+                filters.append(f"adelay={delay_ms}|{delay_ms}")
+            elif offset < 0:
+                filters.append(f"atrim=start={abs(offset):.3f}")
+            filters.append("aresample=async=1:first_pts=0")
+            filter_expr = f"[1:a]{','.join(filters)}[{filter_name}]"
+
+            command.extend(["-filter_complex", filter_expr, "-map", "0:v:0", "-map", f"[{filter_name}]"])
+        else:
+            command.extend(["-map", "0:v:0", "-map", "1:a:0?"])
+
+        if container == "mp4":
+            command.extend(["-c:v", "libx264", "-preset", "fast", "-crf", "23", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart"])
+        elif container == "webm":
+            command.extend(["-c:v", "libvpx-vp9", "-crf", "32", "-b:v", "0", "-c:a", "libopus", "-b:a", "128k"])
+        else:
+            command.extend(["-c:v", "mpeg4", "-q:v", "4", "-c:a", "mp3", "-b:a", "192k"])
+
+        command.extend(["-shortest", output_path])
+        return command
+
+    def get_external_audio_duration(self) -> Optional[float]:
+        audio_path = getattr(self.tutorial, "audio_path", None)
+        if not audio_path or not os.path.exists(audio_path):
+            return None
+        if audio_path.lower().endswith(".wav"):
+            try:
+                with wave.open(audio_path, "rb") as wav_file:
+                    frame_count = wav_file.getnframes()
+                    frame_rate = wav_file.getframerate() or 0
+                if frame_rate > 0:
+                    return frame_count / frame_rate
+            except Exception:
+                return None
+        return None
     
     def _draw_hitbox_overlay(self, frame: np.ndarray, step: Step) -> np.ndarray:
         """Draw hitbox overlay on frame."""

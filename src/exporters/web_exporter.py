@@ -38,6 +38,7 @@ class WebExporter:
             'shape': step.shape,
             'keyboard_mode': step.keyboard_mode,
             'keyboard_input': step.keyboard_input,
+            'keyboard_code': getattr(step, 'keyboard_code', ''),
         }
     
     def export_html(self, output_path: str, embed_images: bool = True) -> bool:
@@ -117,41 +118,6 @@ class WebExporter:
             background: linear-gradient(90deg, #00d2ff, #3a7bd5, #9333ea);
             transition: width 0.5s ease;
             box-shadow: 0 0 20px rgba(0, 210, 255, 0.5);
-        }}
-        
-        /* Header */
-        .header {{
-            position: fixed;
-            top: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: rgba(0,0,0,0.7);
-            padding: 10px 30px;
-            border-radius: 30px;
-            backdrop-filter: blur(10px);
-            z-index: 100;
-            display: flex;
-            align-items: center;
-            gap: 15px;
-        }}
-        .step-badge {{
-            background: linear-gradient(135deg, #ff6b6b, #ff8e53);
-            width: 35px;
-            height: 35px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: bold;
-        }}
-        .step-desc {{
-            font-size: 1.1em;
-        }}
-        .step-instruction {{
-            font-size: 0.9em;
-            color: #aaa;
-            margin-top: 5px;
-            max-width: 500px;
         }}
         
         /* Main Canvas Area */
@@ -403,15 +369,6 @@ class WebExporter:
         <div class="progress-bar" id="progressBar"></div>
     </div>
     
-    <!-- Header -->
-    <div class="header" id="header">
-        <div class="step-badge" id="stepBadge">1</div>
-        <div>
-            <div class="step-desc" id="stepDesc">\ubd88\ub7ec\uc624\ub294 \uc911...</div>
-            <div class="step-instruction" id="stepInstruction"></div>
-        </div>
-    </div>
-    
     <!-- Main Canvas -->
     <div class="canvas-container" id="canvasContainer">
         <div class="canvas-inner" id="canvasInner">
@@ -516,11 +473,6 @@ class WebExporter:
             
             const step = steps[index];
             currentStep = index;
-            
-            // Update header
-            document.getElementById('stepBadge').textContent = step.index;
-            document.getElementById('stepDesc').textContent = step.description;
-            document.getElementById('stepInstruction').textContent = step.instruction || '';
             
             // Update progress
             document.getElementById('progressBar').style.width = ((index + 1) / steps.length * 100) + '%';
@@ -719,6 +671,14 @@ class WebExporter:
             return normalized.split('+').map(formatKeyPart).join(' + ');
         }}
 
+        function normalizeKeyCode(value) {{
+            return (value || '').trim();
+        }}
+
+        function eventKeyCode(e) {{
+            return normalizeKeyCode(e.code);
+        }}
+
         function normalizeTextInput(value) {{
             return (value || '')
                 .trim()
@@ -727,24 +687,35 @@ class WebExporter:
                 .replace(/\\s+/g, ' ');
         }}
 
-        function eventMatchesExpectedInput(e, expectedInput) {{
+        function eventMatchesExpectedInput(e, expectedInput, expectedCode) {{
             const normalizedExpected = normalizeKeyCombo(expectedInput);
+            const normalizedCode = normalizeKeyCode(expectedCode);
             if (!normalizedExpected.includes('+')) {{
+                if (normalizedCode) return eventKeyCode(e) === normalizedCode;
                 return eventKeyName(e) === normalizedExpected;
             }}
 
             const parts = normalizedExpected.split('+');
             const expectedMain = parts[parts.length - 1];
             const requiredModifiers = new Set(parts.slice(0, -1));
+            const actualMainName = eventKeyName(e);
             const activeModifiers = new Set([
                 e.ctrlKey ? 'ctrl' : '',
                 e.shiftKey ? 'shift' : '',
                 e.altKey ? 'alt' : '',
                 e.metaKey ? 'cmd' : '',
-                eventKeyName(e) === 'space' ? 'space' : ''
+                actualMainName === 'space' ? 'space' : ''
             ].filter(Boolean));
 
-            return eventKeyName(e) === expectedMain &&
+            if (activeModifiers.has(actualMainName)) {{
+                activeModifiers.delete(actualMainName);
+            }}
+
+            const mainMatches = normalizedCode
+                ? eventKeyCode(e) === normalizedCode
+                : actualMainName === expectedMain;
+
+            return mainMatches &&
                 requiredModifiers.size === activeModifiers.size &&
                 Array.from(requiredModifiers).every(key => activeModifiers.has(key));
         }}
@@ -757,6 +728,7 @@ class WebExporter:
             modalInput.className = 'modal-input';
             document.onkeydown = null;
             let expectedInput = normalizeKeyCombo(step.keyboard_input);
+            const expectedCode = normalizeKeyCode(step.keyboard_code);
             const expectedText = normalizeTextInput(step.keyboard_input);
             
             const specialKeys = ['delete', 'backspace', 'tab', 'esc', 'enter', 'space',
@@ -793,7 +765,7 @@ class WebExporter:
             }}
             
             document.onkeydown = function(e) {{
-                if (isSpecial && eventMatchesExpectedInput(e, expectedInput)) {{
+                if (isSpecial && eventMatchesExpectedInput(e, expectedInput, expectedCode)) {{
                     e.preventDefault();
                     modalInput.className = 'modal-input success';
                     setTimeout(() => {{
@@ -822,7 +794,7 @@ class WebExporter:
                 else if (e.key.startsWith('F') && e.key.length > 1) keyName = e.key.toLowerCase();
 
                 if (isSpecial) {{
-                    if (eventMatchesExpectedInput(e, expectedInput)) {{
+                    if (eventMatchesExpectedInput(e, expectedInput, expectedCode)) {{
                         e.preventDefault();
                         modalInput.className = 'modal-input success';
                         setTimeout(() => {{
@@ -1234,14 +1206,6 @@ class WebExporter:
             justify-content: center;
             font-weight: bold;
         }}
-        .step-desc {{ font-size: 1.1em; }}
-        .step-instruction {{
-            font-size: 0.9em;
-            color: #aaa;
-            margin-top: 5px;
-            max-width: 500px;
-        }}
-        
         .video-container {{
             position: fixed;
             top: 0;
@@ -1423,14 +1387,6 @@ class WebExporter:
         <div class="progress-bar" id="progressBar"></div>
     </div>
     
-    <div class="header" id="header">
-        <div class="step-badge" id="stepBadge">1</div>
-        <div>
-            <div class="step-desc" id="stepDesc">\ubd88\ub7ec\uc624\ub294 \uc911...</div>
-            <div class="step-instruction" id="stepInstruction"></div>
-        </div>
-    </div>
-    
         <div class="video-container">
         <div class="video-wrapper" id="videoWrapper">
             <video id="video" src="{video_file}" preload="auto"></video>
@@ -1496,15 +1452,26 @@ class WebExporter:
             currentStep = 0;
             isPaused = false;
             video.currentTime = 0;
-            video.play();
+            safePlayMedia();
             
             // Start audio with offset
             if (audio.src) {{
                 if (audioOffset >= 0) {{
-                    setTimeout(() => {{ audio.currentTime = 0; audio.play(); }}, audioOffset * 1000);
+                    setTimeout(() => {{
+                        if (!isPaused && currentStep < steps.length) {{
+                            audio.currentTime = 0;
+                            const audioPlayPromise = audio.play();
+                            if (audioPlayPromise && typeof audioPlayPromise.catch === 'function') {{
+                                audioPlayPromise.catch(() => {{}});
+                            }}
+                        }}
+                    }}, audioOffset * 1000);
                 }} else {{
                     audio.currentTime = -audioOffset;
-                    audio.play();
+                    const audioPlayPromise = audio.play();
+                    if (audioPlayPromise && typeof audioPlayPromise.catch === 'function') {{
+                        audioPlayPromise.catch(() => {{}});
+                    }}
                 }}
             }}
         }}
@@ -1528,9 +1495,6 @@ class WebExporter:
             if (audio.src) audio.pause();  // Pause audio in sync
             isPaused = true;
             
-            document.getElementById('stepBadge').textContent = step.index;
-            document.getElementById('stepDesc').textContent = step.description;
-            document.getElementById('stepInstruction').textContent = step.instruction || '';
             document.getElementById('progressBar').style.width = ((currentStep + 1) / steps.length * 100) + '%';
             hidePointerOverlays();
             if (step.action_type === 'keyboard') {{
@@ -1541,6 +1505,20 @@ class WebExporter:
             }} else {{
                 hideKeyboardModal();
                 positionHitbox(step);
+            }}
+        }}
+
+        function safePlayMedia() {{
+            const videoPlayPromise = video.play();
+            if (videoPlayPromise && typeof videoPlayPromise.catch === 'function') {{
+                videoPlayPromise.catch(() => {{}});
+            }}
+
+            if (audio.src && audioOffset <= 0) {{
+                const audioPlayPromise = audio.play();
+                if (audioPlayPromise && typeof audioPlayPromise.catch === 'function') {{
+                    audioPlayPromise.catch(() => {{}});
+                }}
             }}
         }}
         
@@ -1725,6 +1703,14 @@ class WebExporter:
             return normalized.split('+').map(formatKeyPart).join(' + ');
         }}
 
+        function normalizeKeyCode(value) {{
+            return (value || '').trim();
+        }}
+
+        function eventKeyCode(e) {{
+            return normalizeKeyCode(e.code);
+        }}
+
         function normalizeTextInput(value) {{
             return (value || '')
                 .trim()
@@ -1733,24 +1719,35 @@ class WebExporter:
                 .replace(/\\s+/g, ' ');
         }}
 
-        function eventMatchesExpectedInput(e, expectedInput) {{
+        function eventMatchesExpectedInput(e, expectedInput, expectedCode) {{
             const normalizedExpected = normalizeKeyCombo(expectedInput);
+            const normalizedCode = normalizeKeyCode(expectedCode);
             if (!normalizedExpected.includes('+')) {{
+                if (normalizedCode) return eventKeyCode(e) === normalizedCode;
                 return eventKeyName(e) === normalizedExpected;
             }}
 
             const parts = normalizedExpected.split('+');
             const expectedMain = parts[parts.length - 1];
             const requiredModifiers = new Set(parts.slice(0, -1));
+            const actualMainName = eventKeyName(e);
             const activeModifiers = new Set([
                 e.ctrlKey ? 'ctrl' : '',
                 e.shiftKey ? 'shift' : '',
                 e.altKey ? 'alt' : '',
                 e.metaKey ? 'cmd' : '',
-                eventKeyName(e) === 'space' ? 'space' : ''
+                actualMainName === 'space' ? 'space' : ''
             ].filter(Boolean));
 
-            return eventKeyName(e) === expectedMain &&
+            if (activeModifiers.has(actualMainName)) {{
+                activeModifiers.delete(actualMainName);
+            }}
+
+            const mainMatches = normalizedCode
+                ? eventKeyCode(e) === normalizedCode
+                : actualMainName === expectedMain;
+
+            return mainMatches &&
                 requiredModifiers.size === activeModifiers.size &&
                 Array.from(requiredModifiers).every(key => activeModifiers.has(key));
         }}
@@ -1761,7 +1758,7 @@ class WebExporter:
             if ((step.click_button || 'left') !== 'left') return;
             if (!requiredModifiersMatch(step)) return;
             this.style.background = 'rgba(0, 255, 0, 0.5)';
-            setTimeout(nextStep, 200);
+            nextStep();
         }});
 
         hitbox.addEventListener('auxclick', function(e) {{
@@ -1773,7 +1770,17 @@ class WebExporter:
             if (!requiredModifiersMatch(step)) return;
             e.preventDefault();
             this.style.background = 'rgba(0, 255, 0, 0.5)';
-            setTimeout(nextStep, 200);
+            nextStep();
+        }});
+
+        hitbox.addEventListener('contextmenu', function(e) {{
+            const step = steps[currentStep];
+            if (!step || step.action_type !== 'click') return;
+            if ((step.click_button || 'left') !== 'right') return;
+            if (!requiredModifiersMatch(step)) return;
+            e.preventDefault();
+            this.style.background = 'rgba(0, 255, 0, 0.5)';
+            nextStep();
         }});
         
         function nextStep() {{
@@ -1785,8 +1792,7 @@ class WebExporter:
                 if (audio.src) audio.pause();  // Stop audio on completion
                 showCompletion();
             }} else {{
-                video.play();
-                if (audio.src) audio.play();  // Resume audio with video
+                safePlayMedia();
             }}
         }}
         
@@ -1796,6 +1802,7 @@ class WebExporter:
             keyboardModal.focus();
             document.onkeydown = null;
             let expectedInput = normalizeKeyCombo(step.keyboard_input);
+            const expectedCode = normalizeKeyCode(step.keyboard_code);
             const expectedText = normalizeTextInput(step.keyboard_input);
             
             const specialKeys = ['delete', 'backspace', 'tab', 'esc', 'enter',
@@ -1835,11 +1842,12 @@ class WebExporter:
             modalInput.className = 'modal-input';
             
             document.onkeydown = function(e) {{
-                if (isSpecial && eventMatchesExpectedInput(e, expectedInput)) {{
+                if (isSpecial && eventMatchesExpectedInput(e, expectedInput, expectedCode)) {{
                     e.preventDefault();
                     modalInput.className = 'modal-input success';
                     document.onkeydown = null;
-                    setTimeout(function() {{ hideKeyboardModal(); nextStep(); }}, 200);
+                    hideKeyboardModal();
+                    nextStep();
                     return false;
                 }}
                 let keyName = e.key.toLowerCase();
@@ -1860,11 +1868,12 @@ class WebExporter:
                 else if (e.key === 'Insert') keyName = 'insert';
                 else if (e.key.startsWith('F') && e.key.length > 1) keyName = e.key.toLowerCase();
                 
-                if (isSpecial && eventMatchesExpectedInput(e, expectedInput)) {{
+                if (isSpecial && eventMatchesExpectedInput(e, expectedInput, expectedCode)) {{
                     e.preventDefault();
                     modalInput.className = 'modal-input success';
                     document.onkeydown = null;
-                    setTimeout(function() {{ hideKeyboardModal(); nextStep(); }}, 200);
+                    hideKeyboardModal();
+                    nextStep();
                     return false;
                 }}
                 
@@ -1873,7 +1882,8 @@ class WebExporter:
                     if (normalizeTextInput(modalInput.value) === expectedText) {{
                         modalInput.className = 'modal-input success';
                         document.onkeydown = null;
-                        setTimeout(function() {{ hideKeyboardModal(); nextStep(); }}, 300);
+                        hideKeyboardModal();
+                        nextStep();
                     }} else {{
                         modalInput.className = 'modal-input error';
                         setTimeout(function() {{ modalInput.className = 'modal-input'; }}, 300);
@@ -1931,7 +1941,7 @@ class WebExporter:
             if (completed) {{
                 hitbox.style.background = 'rgba(0, 255, 0, 0.5)';
                 dragTarget.style.background = 'rgba(0, 255, 0, 0.45)';
-                setTimeout(nextStep, 200);
+                nextStep();
             }}
         }});
 
