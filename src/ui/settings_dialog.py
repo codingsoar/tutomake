@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
-                             QTableWidget, QTableWidgetItem, QPushButton, 
+                             QTableWidget, QTableWidgetItem, QPushButton, QComboBox,
                              QHeaderView, QMessageBox)
 from PySide6.QtCore import Qt
 from .widgets.hotkey_input import HotkeyInput
@@ -20,6 +20,18 @@ class SettingsDialog(QDialog):
         title = QLabel("Keyboard Shortcuts")
         title.setStyleSheet("font-size: 18px; font-weight: bold; margin-bottom: 10px;")
         layout.addWidget(title)
+
+        language_layout = QHBoxLayout()
+        language_label = QLabel("UI Language")
+        language_layout.addWidget(language_label)
+        self.ui_language_combo = QComboBox()
+        self.ui_language_combo.addItem("English", "en")
+        self.ui_language_combo.addItem("한국어", "ko")
+        current_language = self.settings.get_ui_language()
+        language_index = self.ui_language_combo.findData(current_language)
+        self.ui_language_combo.setCurrentIndex(language_index if language_index >= 0 else 0)
+        language_layout.addWidget(self.ui_language_combo, 1)
+        layout.addLayout(language_layout)
         
         # Shortcuts Table
         self.table = QTableWidget()
@@ -93,6 +105,7 @@ class SettingsDialog(QDialog):
             self.inputs[action] = inp
             
     def save_settings(self):
+        self.settings.set_ui_language(self.ui_language_combo.currentData() or "en")
         for action, inp in self.inputs.items():
             self.settings.shortcuts[action] = inp.key_sequence
             

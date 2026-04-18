@@ -1,19 +1,23 @@
-from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QListWidget, 
+from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QListWidget,
                              QLabel, QLineEdit, QTextEdit, QFormLayout, QScrollArea, QSizePolicy,
                              QRadioButton, QButtonGroup, QCheckBox, QSlider, QPushButton,
                              QMenu, QMainWindow, QDockWidget, QGraphicsView, QGraphicsScene,
                              QGraphicsRectItem, QGraphicsLineItem, QGraphicsTextItem, QGroupBox,
-                             QComboBox, QFileDialog, QMessageBox)
-from PySide6.QtGui import QPixmap, QPainter, QPen, QColor, QResizeEvent, QImage, QAction, QPolygon, QFont, QBrush, QWheelEvent
-from PySide6.QtCore import Qt, QRect, QTimer, Signal, QPoint, QRectF, QPointF, QSignalBlocker
+                             QComboBox, QFileDialog, QMessageBox, QSpinBox, QLayout, QAbstractSpinBox,
+                             QStyle, QStyleOptionSpinBox, QApplication, QPlainTextEdit)
+from PySide6.QtGui import QPixmap, QPainter, QPen, QColor, QResizeEvent, QImage, QAction, QPolygon, QFont, QBrush, QWheelEvent, QPalette, QMovie
+from PySide6.QtCore import Qt, QRect, QTimer, Signal, QPoint, QRectF, QPointF, QSignalBlocker, QSize, QObject
 import os
 import tempfile
+import threading
 import wave
 import cv2
 import numpy as np
-from ..key_utils import display_key_name
+from ..key_utils import display_key_combo, display_key_name, key_code_from_key_name, normalize_key_combo, normalize_key_name
 from ..model import Tutorial, Step
 from ..recorder import AUDIO_AVAILABLE, get_audio_input_devices, record_test_audio_clip
+from ..exporters.web_exporter import WebExporter
+from ..settings import Settings
 
 class ZoomableImageCanvas(QWidget):
     """Image canvas with zoom/pan support for Editor."""
@@ -184,6 +188,7 @@ class ZoomableImageCanvas(QWidget):
                 painter.setPen(text_color)
                 font = painter.font()
                 font.setPointSize(max(8, int((step.text_font_size or 24) * self.scale)))
+                font.setBold((getattr(step, "text_font_weight", "normal") or "normal").lower() == "bold")
                 painter.setFont(font)
                 
                 display_text = step.keyboard_input if step.keyboard_input else "Type here..."
@@ -441,7 +446,7 @@ class ZoomControlBar(QWidget):
             }
         """
         
-        self.btn_out = QPushButton("−")
+        self.btn_out = QPushButton("-")
         self.btn_out.setStyleSheet(btn_style)
         self.btn_out.clicked.connect(self.canvas.zoom_out)
         layout.addWidget(self.btn_out)
@@ -567,6 +572,7 @@ class ImageCanvas(QLabel):
             painter.setPen(text_color)
             font = painter.font()
             font.setPointSize(self.step.text_font_size or 24)
+            font.setBold((getattr(self.step, "text_font_weight", "normal") or "normal").lower() == "bold")
             painter.setFont(font)
             
             display_text = self.step.keyboard_input if self.step.keyboard_input else "Type here..."
@@ -784,7 +790,7 @@ class TimelineWidget(QWidget):
         zoom_bar.setContentsMargins(50, 2, 5, 2)  # Left margin matches track labels
         
         # Zoom out button
-        btn_zoom_out = QPushButton("−")
+        btn_zoom_out = QPushButton("-")
         btn_zoom_out.setFixedSize(24, 20)
         btn_zoom_out.clicked.connect(self.zoom_out)
         btn_zoom_out.setStyleSheet("QPushButton { background: #333; color: #aaa; border: none; font-size: 14px; } QPushButton:hover { background: #444; }")
@@ -976,6 +982,10 @@ class TimelineWidget(QWidget):
     def keyPressEvent(self, event):
         """Handle keyboard shortcuts."""
         from PySide6.QtCore import Qt
+        focus_widget = QApplication.focusWidget()
+        if isinstance(focus_widget, (QLineEdit, QTextEdit, QPlainTextEdit)):
+            super().keyPressEvent(event)
+            return
         
         if event.key() == Qt.Key.Key_Space:
             self.toggle_play()
@@ -1472,10 +1482,8 @@ class TimelineWidget(QWidget):
         
         # Helper to match key events against settings
         def matches(action):
-            # Use strict integer conversion for PySide6 compatibility
-            key_int = event.key()
-            mod_int = int(event.modifiers())
-            return QKeySequence(key_int | mod_int) == settings.get_key(action)
+            event_sequence = QKeySequence(event.keyCombination())
+            return event_sequence == settings.get_key(action)
         
         if matches("toggle_play"):
             self.toggle_play()
@@ -1695,37 +1703,37 @@ class TimelineGraphicsView(QGraphicsView):
             self.timeline_widget.refresh_step_items()
             
             # Step info header
-            menu.addAction(f"📍 Step {step_idx + 1}: {step.description[:20]}...").setEnabled(False)
+            menu.addAction(f"Step {step_idx + 1}: {step.description[:20]}...").setEnabled(False)
             menu.addSeparator()
             
             # Edit action - select in steps list
-            edit_action = menu.addAction("✏️ Edit Properties")
+            edit_action = menu.addAction("Edit Properties")
             edit_action.triggered.connect(lambda: self.timeline_widget.step_selected.emit(step_idx))
             
             menu.addSeparator()
             
             # Copy
-            copy_action = menu.addAction("📋 Copy")
+            copy_action = menu.addAction("Copy")
             copy_action.triggered.connect(lambda: self.copy_step(step_idx))
             
             # Duplicate
-            duplicate_action = menu.addAction("📑 Duplicate")
+            duplicate_action = menu.addAction("Duplicate")
             duplicate_action.triggered.connect(lambda: self.duplicate_step(step_idx))
             
             menu.addSeparator()
             
             # Move left/right
             if step_idx > 0:
-                move_left = menu.addAction("⬅️ Move Earlier")
+                move_left = menu.addAction("Move Earlier")
                 move_left.triggered.connect(lambda: self.move_step(step_idx, -0.5))
             
-            move_right = menu.addAction("➡️ Move Later")
+            move_right = menu.addAction("Move Later")
             move_right.triggered.connect(lambda: self.move_step(step_idx, 0.5))
             
             menu.addSeparator()
             
             # Delete
-            delete_action = menu.addAction("🗑️ Delete")
+            delete_action = menu.addAction("Delete")
             delete_action.triggered.connect(lambda: self.delete_step(step_idx))
             
         else:
@@ -1733,18 +1741,18 @@ class TimelineGraphicsView(QGraphicsView):
             current_position = scene_pos.x() / pps
             
             # Add new step
-            add_click = menu.addAction("🖱️ Add Click Step Here")
+            add_click = menu.addAction("Add Click Step Here")
             # Add new step
-            add_click = menu.addAction("🖱️ Add Click Step Here")
+            add_click = menu.addAction("Add Click Step Here")
             add_click.triggered.connect(lambda: self.timeline_widget.step_added_with_type.emit(current_position, "click"))
             
-            add_keyboard = menu.addAction("⌨️ Add Keyboard Step Here")
-            add_keyboard = menu.addAction("⌨️ Add Keyboard Step Here")
+            add_keyboard = menu.addAction("Add Keyboard Step Here")
+            add_keyboard = menu.addAction("Add Keyboard Step Here")
             add_keyboard.triggered.connect(lambda: self.timeline_widget.step_added_with_type.emit(current_position, "keyboard"))
             
             if self.clipboard_step:
                 menu.addSeparator()
-                paste_action = menu.addAction("📋 Paste Step")
+                paste_action = menu.addAction("Paste Step")
                 paste_action.triggered.connect(lambda: self.paste_step(current_position))
         
         menu.exec(self.mapToGlobal(pos))
@@ -1834,32 +1842,251 @@ class CollapsibleSection(QGroupBox):
         super().__init__(title, parent)
         self.setCheckable(True)
         self.setChecked(True)
+        self.content_widget = QWidget(self)
+        self.content_widget.setObjectName("sectionBody")
+        self.control_height = 28
+        self.label_width = 96
 
         outer_layout = QVBoxLayout(self)
-        outer_layout.setContentsMargins(10, 14, 10, 10)
-        outer_layout.setSpacing(8)
+        outer_layout.setContentsMargins(0, 4, 0, 0)
+        outer_layout.setSpacing(2)
 
-        self.content_widget = QWidget(self)
         self.form_layout = QFormLayout(self.content_widget)
-        self.form_layout.setContentsMargins(0, 0, 0, 0)
-        self.form_layout.setSpacing(8)
+        self.form_layout.setContentsMargins(0, 6, 0, 0)
+        self.form_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        self.form_layout.setHorizontalSpacing(8)
+        self.form_layout.setVerticalSpacing(4)
+        self.form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         outer_layout.addWidget(self.content_widget)
 
         self.toggled.connect(self._toggle_content)
         self._toggle_content(True)
+        self._apply_section_style()
+
+    def _apply_section_style(self):
+        from . import styles
+
+        if styles.is_dark_mode():
+            title_color = "#f3f6fb"
+            label_color = "#93a4ba"
+            body_border = "#263242"
+            title_bg = "#121212"
+            field_bg = "#2a2a2a"
+            field_border = "#4a4f57"
+            field_text = "#f3f6fb"
+        else:
+            title_color = "#1f2937"
+            label_color = "#66758a"
+            body_border = "#d9e2ec"
+            title_bg = "#ffffff"
+            field_bg = "#ffffff"
+            field_border = "#bcc7d3"
+            field_text = "#1f2937"
+
+        self.setStyleSheet(f"""
+            QGroupBox {{
+                border: none;
+                margin-top: 10px;
+                padding-top: 0px;
+                background: transparent;
+                font-weight: 700;
+                font-size: 12px;
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                left: 0px;
+                top: -1px;
+                padding: 0 0 4px 0;
+                color: {title_color};
+                background: {title_bg};
+            }}
+            QWidget#sectionBody {{
+                background: transparent;
+                border: none;
+                border-top: 1px solid {body_border};
+                border-radius: 0px;
+            }}
+            QWidget#sectionBody QLabel {{
+                color: {label_color};
+            }}
+            QWidget#sectionBody QLabel[rowLabel="true"] {{
+                min-width: {self.label_width}px;
+                max-width: {self.label_width}px;
+                padding: 0 8px;
+                border: 1px solid {body_border};
+                background: {title_bg};
+                border-radius: 0px;
+            }}
+            QWidget#sectionBody QLineEdit,
+            QWidget#sectionBody QComboBox,
+            QWidget#sectionBody QSpinBox,
+            QWidget#sectionBody QPushButton {{
+                min-height: {self.control_height}px;
+                max-height: {self.control_height}px;
+                color: {field_text};
+                background: {field_bg};
+                border: 1px solid {field_border};
+                padding-top: 0px;
+                padding-bottom: 0px;
+                border-radius: 0px;
+            }}
+            QWidget#sectionBody QSpinBox {{
+                font-weight: 600;
+                padding-right: 28px;
+            }}
+            QWidget#sectionBody QSpinBox::up-button,
+            QWidget#sectionBody QSpinBox::down-button {{
+                width: 28px;
+                min-width: 28px;
+                border-left: 1px solid {field_border};
+                color: {field_text};
+                background: {field_bg};
+                border-radius: 0px;
+            }}
+            QWidget#sectionBody QSpinBox::up-button {{
+                subcontrol-origin: border;
+                subcontrol-position: top right;
+                height: 14px;
+                border-bottom: 1px solid {field_border};
+            }}
+            QWidget#sectionBody QSpinBox::down-button {{
+                subcontrol-origin: border;
+                subcontrol-position: bottom right;
+                height: 14px;
+            }}
+            QWidget#sectionBody QSpinBox::up-arrow,
+            QWidget#sectionBody QSpinBox::down-arrow {{
+                color: {title_color};
+                width: 10px;
+                height: 10px;
+            }}
+            QWidget#sectionBody QLineEdit,
+            QWidget#sectionBody QComboBox,
+            QWidget#sectionBody QSpinBox,
+            QWidget#sectionBody QTextEdit,
+            QWidget#sectionBody QPushButton {{
+                border-radius: 0px;
+            }}
+            QWidget#sectionBody QTextEdit {{
+                min-height: 56px;
+                max-height: 56px;
+                color: {field_text};
+                background: {field_bg};
+                border: 1px solid {field_border};
+                border-radius: 0px;
+            }}
+        """)
 
     def _toggle_content(self, expanded: bool):
         self.content_widget.setVisible(expanded)
 
+    def _normalize_field(self, field):
+        if isinstance(field, QLayout):
+            container = QWidget(self.content_widget)
+            container.setContentsMargins(0, 0, 0, 0)
+            container.setLayout(field)
+            field.setContentsMargins(0, 0, 0, 0)
+            if isinstance(field, QHBoxLayout):
+                container.setMinimumHeight(self.control_height)
+                container.setMaximumHeight(self.control_height)
+            return container
+
+        if isinstance(field, QWidget) and not isinstance(field, QTextEdit):
+            field.setMinimumHeight(self.control_height)
+            field.setMaximumHeight(self.control_height)
+        return field
+
     def addRow(self, *args):
-        self.form_layout.addRow(*args)
+        if len(args) == 2 and isinstance(args[0], str):
+            if not args[0].strip():
+                self.form_layout.addRow(self._normalize_field(args[1]))
+                return None
+            label = QLabel(args[0], self.content_widget)
+            label.setProperty("rowLabel", bool(args[0].strip()))
+            label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            label.setMinimumWidth(self.label_width)
+            label.setMaximumWidth(self.label_width)
+            label.setMinimumHeight(self.control_height)
+            label.setMaximumHeight(self.control_height)
+            self.form_layout.addRow(label, self._normalize_field(args[1]))
+            return label
+        normalized_args = list(args)
+        if normalized_args:
+            normalized_args[-1] = self._normalize_field(normalized_args[-1])
+        self.form_layout.addRow(*normalized_args)
+        return None
+
+
+class PropertySpinBox(QSpinBox):
+    """Spin box with explicit + / - glyphs for reliable visibility across styles."""
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+
+        option = QStyleOptionSpinBox()
+        self.initStyleOption(option)
+        style = self.style()
+
+        up_rect = style.subControlRect(
+            QStyle.ComplexControl.CC_SpinBox,
+            option,
+            QStyle.SubControl.SC_SpinBoxUp,
+            self,
+        )
+        down_rect = style.subControlRect(
+            QStyle.ComplexControl.CC_SpinBox,
+            option,
+            QStyle.SubControl.SC_SpinBoxDown,
+            self,
+        )
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        text_color = self.palette().color(QPalette.ColorRole.Text)
+        painter.setPen(text_color)
+        font = painter.font()
+        font.setBold(True)
+        font.setPointSize(8)
+        painter.setFont(font)
+        painter.drawText(up_rect, Qt.AlignmentFlag.AlignCenter, "+")
+        painter.drawText(down_rect, Qt.AlignmentFlag.AlignCenter, "-")
+        painter.end()
+
+
+class DragGifPreviewWorker(QObject):
+    preview_ready = Signal(int, str, object)
+
+    def __init__(self, request_id: int, step_id: str, video_path: str, step_data: dict):
+        super().__init__()
+        self.request_id = request_id
+        self.step_id = step_id
+        self.video_path = video_path
+        self.step_data = step_data
+        self._thread = None
+
+    def start(self):
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        tutorial = Tutorial(title="Drag Preview", video_path=self.video_path, steps=[Step(**self.step_data)])
+        gif_bytes = WebExporter(tutorial)._generate_drag_guide_gif_bytes(tutorial.steps[0])
+        self.preview_ready.emit(self.request_id, self.step_id, gif_bytes)
 
 
 class Editor(QMainWindow):
     def __init__(self, tutorial: Tutorial):
         super().__init__()
         self.tutorial = tutorial
+        self.settings = Settings()
         self.video_cap = None
+        self._drag_preview_movie = None
+        self._drag_preview_temp_path = None
+        self._drag_preview_request_id = 0
+        self._drag_preview_workers = {}
+        self._drag_preview_step_id = ""
+        self.property_label_widgets = {}
         
         # Undo/Redo History
         self.history_stack = []  # List of tutorial state snapshots
@@ -1868,6 +2095,327 @@ class Editor(QMainWindow):
         
         self.init_ui()
         self.save_state()  # Save initial state
+
+    def _configure_property_spinbox(self, spinbox: QSpinBox):
+        spinbox.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.PlusMinus)
+        spinbox.setAccelerated(True)
+        spinbox.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        return spinbox
+
+    def _configure_icon_button(self, button: QPushButton, icon: QStyle.StandardPixmap, tooltip: str):
+        button.setText("")
+        button.setToolTip(tooltip)
+        button.setIcon(self.style().standardIcon(icon))
+        button.setIconSize(button.size())
+        return button
+
+    def _is_text_input_focus(self):
+        focus_widget = QApplication.focusWidget()
+        return isinstance(focus_widget, (QLineEdit, QTextEdit, QPlainTextEdit))
+
+    def _normalize_keyboard_step(self, step: Step):
+        if step.action_type != "keyboard":
+            return
+
+        mode = (step.keyboard_mode or "text").strip().lower()
+        if mode not in {"text", "key"}:
+            mode = "text"
+        step.keyboard_mode = mode
+
+        if mode == "key":
+            normalized_input = (
+                normalize_key_combo(step.keyboard_input)
+                if "+" in (step.keyboard_input or "")
+                else normalize_key_name(step.keyboard_input)
+            )
+            step.keyboard_input = normalized_input
+            main_key = normalized_input.split("+")[-1] if normalized_input else ""
+            step.keyboard_code = key_code_from_key_name(main_key) if main_key else ""
+            if normalized_input:
+                label = display_key_combo(normalized_input) if "+" in normalized_input else display_key_name(normalized_input)
+                step.description = f"Press {label}"
+            elif step.description.startswith("Press "):
+                step.description = "Type text"
+            return
+
+        step.keyboard_code = ""
+        if step.description.startswith("Press ") or not step.description:
+            step.description = "Type text"
+
+    def _ui_language(self) -> str:
+        return self.settings.get_ui_language()
+
+    def _tr(self, key: str) -> str:
+        translations = {
+            "en": {
+                "properties": "Properties",
+                "step_section": "Step",
+                "description": "Description:",
+                "instruction": "Instruction:",
+                "instruction_placeholder": "Enter step-by-step instruction here...",
+                "default_character": "Use default character",
+                "enable_click_sound": "Enable Click Sound",
+                "input_type": "Input Type:",
+                "expected_input": "Expected Input:",
+                "expected_input_placeholder": "Expected keyboard input",
+                "space_key": "Space Key:",
+                "text_style_section": "Text Style",
+                "font": "Font:",
+                "font_size": "Font Size:",
+                "font_weight": "Font Weight:",
+                "normal": "Normal",
+                "bold": "Bold",
+                "text_color": "Text Color:",
+                "bg_color": "Bg Color:",
+                "hitbox_style_section": "Hitbox Style",
+                "shape": "Shape:",
+                "rectangle": "Rectangle",
+                "circle": "Circle",
+                "line_width": "Line Width:",
+                "line_style": "Line Style:",
+                "line_color": "Line Color:",
+                "fill_color": "Fill Color:",
+                "fill_opacity": "Fill Opacity:",
+                "drag_section": "Drag",
+                "drag_button": "Drag Button:",
+                "left": "Left",
+                "middle": "Middle",
+                "right": "Right",
+                "min_distance": "Min Distance:",
+                "auto_drag_gif": "Auto-create GIF from recorded video",
+                "gif_lead": "GIF Lead:",
+                "gif_tail": "GIF Tail:",
+                "gif_fps": "GIF FPS:",
+                "gif_size": "GIF Size:",
+                "show_direction_arrow": "Show direction arrow",
+                "arrow_size": "Arrow Size:",
+                "preview": "Preview:",
+                "drag_preview": "Drag GIF preview",
+                "audio_section": "Audio",
+                "input_device": "Input Device:",
+                "test_mic": "Test Mic",
+                "refresh_inputs": "Refresh Inputs",
+                "audio_file": "Audio File:",
+                "no_audio_loaded": "No audio loaded",
+                "sync_offset": "Sync Offset:",
+                "web_export_text_section": "Web Export Text",
+                "tutorial_title": "Tutorial Title:",
+                "start_subtitle": "Start Subtitle:",
+                "start_button": "Start Button:",
+                "completion_title": "Completion Title:",
+                "completion_subtitle": "Completion Subtitle:",
+                "restart_button": "Restart Button:",
+                "guide_card_section": "Guide Card",
+                "language": "Language:",
+                "korean": "Korean",
+                "english": "English",
+                "default_image": "Default Image:",
+                "step_card_image": "Step Card Image:",
+                "no_character_image": "No character image",
+                "character_size": "Character Size:",
+                "card_anchor": "Card Anchor:",
+                "fixed_top": "Fixed Top",
+                "near_action": "Near Action",
+                "card_direction": "Card Direction:",
+                "auto": "Auto",
+                "above": "Above",
+                "below": "Below",
+                "card_offset": "Card Offset:",
+                "vertical_offset": "Vertical Offset:",
+                "horizontal_offset": "Horizontal Offset:",
+                "card_width": "Card Width:",
+                "card_scale": "Card Scale:",
+                "badge_size": "Badge Size:",
+                "character_gap": "Character Gap:",
+                "card_padding": "Card Padding:",
+                "card_opacity": "Card Opacity:",
+                "text_input": "Text Input",
+                "key_input": "Key Input",
+                "submit_step": "Submit Step",
+                "insert_space": "Insert Space",
+            },
+            "ko": {
+                "properties": "속성",
+                "step_section": "단계",
+                "description": "설명:",
+                "instruction": "안내문:",
+                "instruction_placeholder": "단계별 안내 문구를 입력하세요...",
+                "default_character": "기본 캐릭터 사용",
+                "enable_click_sound": "클릭 사운드 사용",
+                "input_type": "입력 방식:",
+                "expected_input": "입력 내용:",
+                "expected_input_placeholder": "예상 키보드 입력",
+                "space_key": "스페이스 키:",
+                "text_style_section": "텍스트 스타일",
+                "font": "글꼴:",
+                "font_size": "글꼴 크기:",
+                "font_weight": "글꼴 두께:",
+                "normal": "보통",
+                "bold": "굵게",
+                "text_color": "텍스트 색상:",
+                "bg_color": "배경 색상:",
+                "hitbox_style_section": "히트박스 스타일",
+                "shape": "도형:",
+                "rectangle": "사각형",
+                "circle": "원형",
+                "line_width": "선 두께:",
+                "line_style": "선 스타일:",
+                "line_color": "선 색상:",
+                "fill_color": "채우기 색상:",
+                "fill_opacity": "채우기 투명도:",
+                "drag_section": "드래그",
+                "drag_button": "드래그 버튼:",
+                "left": "왼쪽",
+                "middle": "가운데",
+                "right": "오른쪽",
+                "min_distance": "최소 거리:",
+                "auto_drag_gif": "녹화 영상으로 GIF 자동 생성",
+                "gif_lead": "GIF 시작 여유:",
+                "gif_tail": "GIF 종료 여유:",
+                "gif_fps": "GIF FPS:",
+                "gif_size": "GIF 크기:",
+                "show_direction_arrow": "방향 화살표 표시",
+                "arrow_size": "화살표 크기:",
+                "preview": "미리보기:",
+                "drag_preview": "드래그 GIF 미리보기",
+                "audio_section": "오디오",
+                "input_device": "입력 장치:",
+                "test_mic": "마이크 테스트",
+                "refresh_inputs": "장치 새로고침",
+                "audio_file": "오디오 파일:",
+                "no_audio_loaded": "불러온 오디오 없음",
+                "sync_offset": "동기화 오프셋:",
+                "web_export_text_section": "웹 내보내기 문구",
+                "tutorial_title": "튜토리얼 제목:",
+                "start_subtitle": "시작 부제목:",
+                "start_button": "시작 버튼:",
+                "completion_title": "완료 제목:",
+                "completion_subtitle": "완료 부제목:",
+                "restart_button": "다시 시작 버튼:",
+                "guide_card_section": "가이드 카드",
+                "language": "언어:",
+                "korean": "한국어",
+                "english": "영어",
+                "default_image": "기본 이미지:",
+                "step_card_image": "단계 카드 이미지:",
+                "no_character_image": "캐릭터 이미지 없음",
+                "character_size": "캐릭터 크기:",
+                "card_anchor": "카드 기준 위치:",
+                "fixed_top": "상단 고정",
+                "near_action": "동작 근처",
+                "card_direction": "카드 방향:",
+                "auto": "자동",
+                "above": "위",
+                "below": "아래",
+                "card_offset": "카드 간격:",
+                "vertical_offset": "세로 오프셋:",
+                "horizontal_offset": "가로 오프셋:",
+                "card_width": "카드 너비:",
+                "card_scale": "카드 배율:",
+                "badge_size": "배지 크기:",
+                "character_gap": "캐릭터 간격:",
+                "card_padding": "카드 여백:",
+                "card_opacity": "카드 투명도:",
+                "text_input": "텍스트 입력",
+                "key_input": "키 입력",
+                "submit_step": "단계 제출",
+                "insert_space": "공백 입력",
+            },
+        }
+        language = self._ui_language()
+        return translations.get(language, translations["en"]).get(key, key)
+
+    def _register_property_label(self, key: str, label_widget):
+        if label_widget is not None:
+            self.property_label_widgets[key] = label_widget
+        return label_widget
+
+    def _set_combo_items(self, combo: QComboBox, items: list[tuple[str, str]]):
+        current_data = combo.currentData()
+        combo.blockSignals(True)
+        combo.clear()
+        for text, data in items:
+            combo.addItem(text, data)
+        new_index = combo.findData(current_data)
+        combo.setCurrentIndex(new_index if new_index >= 0 else 0)
+        combo.blockSignals(False)
+
+    def retranslate_properties_panel(self):
+        self.props_dock.setWindowTitle(self._tr("properties"))
+        section_titles = {
+            "step": "step_section",
+            "text_style": "text_style_section",
+            "hitbox_style": "hitbox_style_section",
+            "drag": "drag_section",
+            "audio": "audio_section",
+            "web_export_text": "web_export_text_section",
+            "guide_card": "guide_card_section",
+        }
+        for key, title_key in section_titles.items():
+            if key in self.property_sections:
+                translated = self._tr(title_key)
+                self.property_sections[key]["title"] = translated
+                self.property_sections[key]["widget"].setTitle(translated)
+
+        for key, widget in self.property_label_widgets.items():
+            widget.setText(self._tr(key))
+
+        if hasattr(self, "instruction_input"):
+            self.instruction_input.setPlaceholderText(self._tr("instruction_placeholder"))
+        if hasattr(self, "text_content"):
+            self.text_content.setPlaceholderText(self._tr("expected_input_placeholder"))
+        if hasattr(self, "chk_sound"):
+            self.chk_sound.setText(self._tr("enable_click_sound"))
+        if hasattr(self, "auto_drag_gif_checkbox"):
+            self.auto_drag_gif_checkbox.setText(self._tr("auto_drag_gif"))
+        if hasattr(self, "drag_arrow_enabled_checkbox"):
+            self.drag_arrow_enabled_checkbox.setText(self._tr("show_direction_arrow"))
+        if hasattr(self, "btn_test_audio_input"):
+            self.btn_test_audio_input.setText(self._tr("test_mic"))
+        if hasattr(self, "btn_refresh_audio_inputs"):
+            self.btn_refresh_audio_inputs.setText(self._tr("refresh_inputs"))
+        if hasattr(self, "keyboard_mode_combo"):
+            self._set_combo_items(self.keyboard_mode_combo, [
+                (self._tr("text_input"), "text"),
+                (self._tr("key_input"), "key"),
+            ])
+        if hasattr(self, "keyboard_space_behavior_combo"):
+            self._set_combo_items(self.keyboard_space_behavior_combo, [
+                (self._tr("submit_step"), "submit_step"),
+                (self._tr("insert_space"), "insert_space"),
+            ])
+        if hasattr(self, "font_weight_combo"):
+            current_text = self.font_weight_combo.currentText()
+            target_data = "Bold" if current_text in {"Bold", "굵게"} else "Normal"
+            self._set_combo_items(self.font_weight_combo, [
+                (self._tr("normal"), "Normal"),
+                (self._tr("bold"), "Bold"),
+            ])
+            self.font_weight_combo.setCurrentIndex(self.font_weight_combo.findData(target_data))
+        if hasattr(self, "drag_button_combo"):
+            self._set_combo_items(self.drag_button_combo, [
+                (self._tr("left"), "left"),
+                (self._tr("middle"), "middle"),
+                (self._tr("right"), "right"),
+            ])
+        if hasattr(self, "guide_language_combo"):
+            self._set_combo_items(self.guide_language_combo, [
+                (self._tr("korean"), "ko"),
+                (self._tr("english"), "en"),
+            ])
+        if hasattr(self, "guide_card_anchor_combo"):
+            self._set_combo_items(self.guide_card_anchor_combo, [
+                (self._tr("fixed_top"), "top_fixed"),
+                (self._tr("near_action"), "follow_action"),
+            ])
+        if hasattr(self, "guide_card_direction_combo"):
+            self._set_combo_items(self.guide_card_direction_combo, [
+                (self._tr("auto"), "auto"),
+                (self._tr("right"), "right"),
+                (self._tr("left"), "left"),
+                (self._tr("above"), "top"),
+                (self._tr("below"), "bottom"),
+            ])
 
     def init_ui(self):
         # ==================== Central Widget (Canvas) ====================
@@ -1936,24 +2484,49 @@ class Editor(QMainWindow):
         props_scroll.setWidgetResizable(True)
         props_widget = QWidget()
         self.props_container_layout = QVBoxLayout(props_widget)
-        self.props_container_layout.setContentsMargins(8, 8, 8, 8)
-        self.props_container_layout.setSpacing(10)
+        self.props_container_layout.setContentsMargins(6, 6, 6, 6)
+        self.props_container_layout.setSpacing(6)
 
         self.property_sections = {}
         self.property_section_visibility = {}
 
         step_section = self._create_property_section("step", "Step")
         self.desc_input = QLineEdit()
+        self.desc_input.setFixedHeight(step_section.control_height)
         self.desc_input.textChanged.connect(self.update_desc_preview)
         self.desc_input.editingFinished.connect(self.save_state)
-        step_section.addRow("Description:", self.desc_input)
+        self._register_property_label("description", step_section.addRow("Description:", self.desc_input))
 
         self.instruction_input = QTextEdit()
         self.instruction_input.setPlaceholderText("Enter step-by-step instruction here...")
-        self.instruction_input.setMaximumHeight(80)
+        self.instruction_input.setMaximumHeight(56)
         self.instruction_input.textChanged.connect(self.update_instruction_preview)
         self.instruction_input.setTabChangesFocus(True)
-        step_section.addRow("Instruction:", self.instruction_input)
+        self._register_property_label("instruction", step_section.addRow("Instruction:", self.instruction_input))
+
+        self.step_guide_image_layout = QHBoxLayout()
+        self.step_guide_image_label = QLabel(self._tr("default_character"))
+        self.step_guide_image_label.setStyleSheet("color: #666; font-style: italic;")
+        self.step_guide_image_layout.addWidget(self.step_guide_image_label, 1)
+        self.step_guide_image_browse_btn = QPushButton()
+        self.step_guide_image_browse_btn.setFixedSize(28, 28)
+        self._configure_icon_button(
+            self.step_guide_image_browse_btn,
+            QStyle.StandardPixmap.SP_ArrowUp,
+            "Import step guide image",
+        )
+        self.step_guide_image_browse_btn.clicked.connect(self.import_step_guide_image)
+        self.step_guide_image_layout.addWidget(self.step_guide_image_browse_btn)
+        self.remove_step_guide_image_btn = QPushButton()
+        self.remove_step_guide_image_btn.setFixedSize(28, 28)
+        self._configure_icon_button(
+            self.remove_step_guide_image_btn,
+            QStyle.StandardPixmap.SP_TitleBarCloseButton,
+            "Remove step guide image",
+        )
+        self.remove_step_guide_image_btn.clicked.connect(self.remove_step_guide_image)
+        self.remove_step_guide_image_btn.setEnabled(False)
+        self.step_guide_image_layout.addWidget(self.remove_step_guide_image_btn)
 
         self.chk_sound = QCheckBox("Enable Click Sound")
         self.chk_sound.toggled.connect(self.update_sound)
@@ -1964,13 +2537,19 @@ class Editor(QMainWindow):
         self.keyboard_mode_combo.addItem("Text Input", "text")
         self.keyboard_mode_combo.addItem("Key Input", "key")
         self.keyboard_mode_combo.currentIndexChanged.connect(self.update_keyboard_mode)
-        step_section.addRow("Input Type:", self.keyboard_mode_combo)
+        self._register_property_label("input_type", step_section.addRow("Input Type:", self.keyboard_mode_combo))
 
         self.text_content = QLineEdit()
         self.text_content.setPlaceholderText("Expected keyboard input")
         self.text_content.textChanged.connect(self.update_keyboard_input_preview)
         self.text_content.editingFinished.connect(self.save_state)
-        step_section.addRow("Expected Input:", self.text_content)
+        self._register_property_label("expected_input", step_section.addRow("Expected Input:", self.text_content))
+
+        self.keyboard_space_behavior_combo = QComboBox()
+        self.keyboard_space_behavior_combo.addItem("Submit Step", "submit_step")
+        self.keyboard_space_behavior_combo.addItem("Insert Space", "insert_space")
+        self.keyboard_space_behavior_combo.currentIndexChanged.connect(self.update_keyboard_space_behavior)
+        self._register_property_label("space_key", step_section.addRow("Space Key:", self.keyboard_space_behavior_combo))
 
         text_style_section = self._create_property_section("text_style", "Text Style")
         from PySide6.QtGui import QFontDatabase
@@ -1981,20 +2560,21 @@ class Editor(QMainWindow):
         if arial_idx >= 0:
             self.font_family_combo.setCurrentIndex(arial_idx)
         self.font_family_combo.currentTextChanged.connect(self.update_text_style_preview)
-        text_style_section.addRow("Font:", self.font_family_combo)
+        self._register_property_label("font", text_style_section.addRow("Font:", self.font_family_combo))
 
-        self.font_size_spinbox = QSpinBox()
+        self.font_size_spinbox = PropertySpinBox()
+        self._configure_property_spinbox(self.font_size_spinbox)
         self.font_size_spinbox.setMinimum(8)
         self.font_size_spinbox.setMaximum(200)
         self.font_size_spinbox.setValue(24)
         self.font_size_spinbox.setSuffix(" pt")
         self.font_size_spinbox.valueChanged.connect(self.update_text_style_preview)
-        text_style_section.addRow("Font Size:", self.font_size_spinbox)
+        self._register_property_label("font_size", text_style_section.addRow("Font Size:", self.font_size_spinbox))
 
         self.font_weight_combo = QComboBox()
         self.font_weight_combo.addItems(["Normal", "Bold"])
         self.font_weight_combo.currentTextChanged.connect(self.update_text_style_preview)
-        text_style_section.addRow("Font Weight:", self.font_weight_combo)
+        self._register_property_label("font_weight", text_style_section.addRow("Font Weight:", self.font_weight_combo))
 
         text_color_layout = QHBoxLayout()
         self.text_color_input = QLineEdit()
@@ -2002,13 +2582,13 @@ class Editor(QMainWindow):
         self.text_color_input.textChanged.connect(self.update_text_style_preview)
         self.text_color_input.editingFinished.connect(self.save_state)
         self.text_color_preview = QLabel()
-        self.text_color_preview.setFixedSize(24, 24)
+        self.text_color_preview.setFixedSize(18, 18)
         self.text_color_preview.setStyleSheet("background: #FFFFFF; border: 1px solid #555; border-radius: 3px;")
         self.text_color_preview.setCursor(Qt.CursorShape.PointingHandCursor)
         self.text_color_preview.mousePressEvent = lambda e: self.pick_text_color()
         text_color_layout.addWidget(self.text_color_input)
         text_color_layout.addWidget(self.text_color_preview)
-        text_style_section.addRow("Text Color:", text_color_layout)
+        self._register_property_label("text_color", text_style_section.addRow("Text Color:", text_color_layout))
 
         bg_color_layout = QHBoxLayout()
         self.bg_color_input = QLineEdit()
@@ -2016,13 +2596,13 @@ class Editor(QMainWindow):
         self.bg_color_input.textChanged.connect(self.update_text_style_preview)
         self.bg_color_input.editingFinished.connect(self.save_state)
         self.bg_color_preview = QLabel()
-        self.bg_color_preview.setFixedSize(24, 24)
+        self.bg_color_preview.setFixedSize(18, 18)
         self.bg_color_preview.setStyleSheet("background: #000000; border: 1px solid #555; border-radius: 3px;")
         self.bg_color_preview.setCursor(Qt.CursorShape.PointingHandCursor)
         self.bg_color_preview.mousePressEvent = lambda e: self.pick_bg_color()
         bg_color_layout.addWidget(self.bg_color_input)
         bg_color_layout.addWidget(self.bg_color_preview)
-        text_style_section.addRow("Bg Color:", bg_color_layout)
+        self._register_property_label("bg_color", text_style_section.addRow("Bg Color:", bg_color_layout))
 
         hitbox_section = self._create_property_section("hitbox_style", "Hitbox Style")
         self.shape_group = QButtonGroup(self)
@@ -2030,30 +2610,33 @@ class Editor(QMainWindow):
         self.radio_circle = QRadioButton("Circle")
         self.shape_group.addButton(self.radio_rect)
         self.shape_group.addButton(self.radio_circle)
-        shape_layout = QVBoxLayout()
+        shape_layout = QHBoxLayout()
         shape_layout.setContentsMargins(0, 0, 0, 0)
-        shape_layout.setSpacing(4)
+        shape_layout.setSpacing(8)
         shape_layout.addWidget(self.radio_rect)
         shape_layout.addWidget(self.radio_circle)
-        hitbox_section.addRow("Shape:", shape_layout)
+        shape_layout.addStretch()
+        self._register_property_label("shape", hitbox_section.addRow("Shape:", shape_layout))
         self.radio_rect.toggled.connect(self.update_shape)
         self.radio_circle.toggled.connect(self.update_shape)
 
         hitbox_width_layout = QHBoxLayout()
+        hitbox_width_layout.setSpacing(6)
         self.hitbox_line_width_slider = QSlider(Qt.Orientation.Horizontal)
         self.hitbox_line_width_slider.setMinimum(1)
         self.hitbox_line_width_slider.setMaximum(10)
         self.hitbox_line_width_slider.setValue(2)
         self.hitbox_line_width_slider.valueChanged.connect(self.update_hitbox_line_width)
         self.hitbox_line_width_label = QLabel("2")
+        self.hitbox_line_width_label.setFixedWidth(22)
         hitbox_width_layout.addWidget(self.hitbox_line_width_slider)
         hitbox_width_layout.addWidget(self.hitbox_line_width_label)
-        hitbox_section.addRow("Line Width:", hitbox_width_layout)
+        self._register_property_label("line_width", hitbox_section.addRow("Line Width:", hitbox_width_layout))
 
         self.hitbox_line_style_combo = QComboBox()
         self.hitbox_line_style_combo.addItems(["solid", "dashed", "dotted"])
         self.hitbox_line_style_combo.currentTextChanged.connect(self.update_hitbox_line_style)
-        hitbox_section.addRow("Line Style:", self.hitbox_line_style_combo)
+        self._register_property_label("line_style", hitbox_section.addRow("Line Style:", self.hitbox_line_style_combo))
 
         line_color_layout = QHBoxLayout()
         self.hitbox_line_color_input = QLineEdit()
@@ -2061,13 +2644,13 @@ class Editor(QMainWindow):
         self.hitbox_line_color_input.textChanged.connect(self.update_hitbox_line_color)
         self.hitbox_line_color_input.editingFinished.connect(self.save_state)
         self.hitbox_line_color_preview = QLabel()
-        self.hitbox_line_color_preview.setFixedSize(24, 24)
+        self.hitbox_line_color_preview.setFixedSize(18, 18)
         self.hitbox_line_color_preview.setStyleSheet("background: #FF0000; border: 1px solid #555; border-radius: 3px;")
         self.hitbox_line_color_preview.setCursor(Qt.CursorShape.PointingHandCursor)
         self.hitbox_line_color_preview.mousePressEvent = lambda e: self.pick_hitbox_line_color()
         line_color_layout.addWidget(self.hitbox_line_color_input)
         line_color_layout.addWidget(self.hitbox_line_color_preview)
-        hitbox_section.addRow("Line Color:", line_color_layout)
+        self._register_property_label("line_color", hitbox_section.addRow("Line Color:", line_color_layout))
 
         fill_color_layout = QHBoxLayout()
         self.hitbox_fill_color_input = QLineEdit()
@@ -2075,24 +2658,96 @@ class Editor(QMainWindow):
         self.hitbox_fill_color_input.textChanged.connect(self.update_hitbox_fill_color)
         self.hitbox_fill_color_input.editingFinished.connect(self.save_state)
         self.hitbox_fill_color_preview = QLabel()
-        self.hitbox_fill_color_preview.setFixedSize(24, 24)
+        self.hitbox_fill_color_preview.setFixedSize(18, 18)
         self.hitbox_fill_color_preview.setStyleSheet("background: rgba(255, 0, 0, 0.2); border: 1px solid #555; border-radius: 3px;")
         self.hitbox_fill_color_preview.setCursor(Qt.CursorShape.PointingHandCursor)
         self.hitbox_fill_color_preview.mousePressEvent = lambda e: self.pick_hitbox_fill_color()
         fill_color_layout.addWidget(self.hitbox_fill_color_input)
         fill_color_layout.addWidget(self.hitbox_fill_color_preview)
-        hitbox_section.addRow("Fill Color:", fill_color_layout)
+        self._register_property_label("fill_color", hitbox_section.addRow("Fill Color:", fill_color_layout))
 
         fill_opacity_layout = QHBoxLayout()
+        fill_opacity_layout.setSpacing(6)
         self.hitbox_fill_opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self.hitbox_fill_opacity_slider.setMinimum(0)
         self.hitbox_fill_opacity_slider.setMaximum(100)
         self.hitbox_fill_opacity_slider.setValue(20)
         self.hitbox_fill_opacity_slider.valueChanged.connect(self.update_hitbox_fill_opacity)
         self.hitbox_fill_opacity_label = QLabel("20%")
+        self.hitbox_fill_opacity_label.setFixedWidth(36)
         fill_opacity_layout.addWidget(self.hitbox_fill_opacity_slider)
         fill_opacity_layout.addWidget(self.hitbox_fill_opacity_label)
-        hitbox_section.addRow("Fill Opacity:", fill_opacity_layout)
+        self._register_property_label("fill_opacity", hitbox_section.addRow("Fill Opacity:", fill_opacity_layout))
+
+        drag_section = self._create_property_section("drag", "Drag")
+        self.drag_button_combo = QComboBox()
+        self.drag_button_combo.addItem("Left", "left")
+        self.drag_button_combo.addItem("Middle", "middle")
+        self.drag_button_combo.addItem("Right", "right")
+        self.drag_button_combo.currentIndexChanged.connect(self.update_drag_button)
+        self._register_property_label("drag_button", drag_section.addRow("Drag Button:", self.drag_button_combo))
+
+        self.drag_min_distance_spin = PropertySpinBox()
+        self._configure_property_spinbox(self.drag_min_distance_spin)
+        self.drag_min_distance_spin.setRange(1, 500)
+        self.drag_min_distance_spin.setSingleStep(1)
+        self.drag_min_distance_spin.setSuffix(" px")
+        self.drag_min_distance_spin.valueChanged.connect(self.update_drag_min_distance)
+        self._register_property_label("min_distance", drag_section.addRow("Min Distance:", self.drag_min_distance_spin))
+
+        self.auto_drag_gif_checkbox = QCheckBox("Auto-create GIF from recorded video")
+        self.auto_drag_gif_checkbox.toggled.connect(self.update_auto_drag_gif_enabled)
+        drag_section.addRow("", self.auto_drag_gif_checkbox)
+
+        self.drag_gif_lead_spin = PropertySpinBox()
+        self._configure_property_spinbox(self.drag_gif_lead_spin)
+        self.drag_gif_lead_spin.setRange(0, 500)
+        self.drag_gif_lead_spin.setSingleStep(5)
+        self.drag_gif_lead_spin.setSuffix(" ms")
+        self.drag_gif_lead_spin.valueChanged.connect(self.update_drag_gif_timing)
+        self._register_property_label("gif_lead", drag_section.addRow("GIF Lead:", self.drag_gif_lead_spin))
+
+        self.drag_gif_tail_spin = PropertySpinBox()
+        self._configure_property_spinbox(self.drag_gif_tail_spin)
+        self.drag_gif_tail_spin.setRange(0, 500)
+        self.drag_gif_tail_spin.setSingleStep(5)
+        self.drag_gif_tail_spin.setSuffix(" ms")
+        self.drag_gif_tail_spin.valueChanged.connect(self.update_drag_gif_timing)
+        self._register_property_label("gif_tail", drag_section.addRow("GIF Tail:", self.drag_gif_tail_spin))
+
+        self.drag_gif_fps_spin = PropertySpinBox()
+        self._configure_property_spinbox(self.drag_gif_fps_spin)
+        self.drag_gif_fps_spin.setRange(1, 24)
+        self.drag_gif_fps_spin.setSingleStep(1)
+        self.drag_gif_fps_spin.setSuffix(" fps")
+        self.drag_gif_fps_spin.valueChanged.connect(self.update_drag_gif_fps)
+        self._register_property_label("gif_fps", drag_section.addRow("GIF FPS:", self.drag_gif_fps_spin))
+
+        self.drag_gif_size_spin = PropertySpinBox()
+        self._configure_property_spinbox(self.drag_gif_size_spin)
+        self.drag_gif_size_spin.setRange(140, 520)
+        self.drag_gif_size_spin.setSingleStep(4)
+        self.drag_gif_size_spin.setSuffix(" px")
+        self.drag_gif_size_spin.valueChanged.connect(self.update_drag_gif_size)
+        self._register_property_label("gif_size", drag_section.addRow("GIF Size:", self.drag_gif_size_spin))
+
+        self.drag_arrow_enabled_checkbox = QCheckBox("Show direction arrow")
+        self.drag_arrow_enabled_checkbox.toggled.connect(self.update_drag_direction_arrow_enabled)
+        drag_section.addRow("", self.drag_arrow_enabled_checkbox)
+
+        self.drag_arrow_size_spin = PropertySpinBox()
+        self._configure_property_spinbox(self.drag_arrow_size_spin)
+        self.drag_arrow_size_spin.setRange(10, 40)
+        self.drag_arrow_size_spin.setSingleStep(1)
+        self.drag_arrow_size_spin.setSuffix(" px")
+        self.drag_arrow_size_spin.valueChanged.connect(self.update_drag_direction_arrow_size)
+        self._register_property_label("arrow_size", drag_section.addRow("Arrow Size:", self.drag_arrow_size_spin))
+
+        self.drag_gif_preview = QLabel(self._tr("drag_preview"))
+        self.drag_gif_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.drag_gif_preview.setMinimumHeight(120)
+        self.drag_gif_preview.setStyleSheet("border: 1px solid #444; background: #111; color: #888;")
+        self._register_property_label("preview", drag_section.addRow("Preview:", self.drag_gif_preview))
 
         audio_section = self._create_property_section("audio", "Audio")
         audio_input_layout = QHBoxLayout()
@@ -2105,68 +2760,203 @@ class Editor(QMainWindow):
         self.btn_refresh_audio_inputs = QPushButton("Refresh Inputs")
         self.btn_refresh_audio_inputs.clicked.connect(self.refresh_audio_inputs)
         audio_input_layout.addWidget(self.btn_refresh_audio_inputs)
-        audio_section.addRow("Input Device:", audio_input_layout)
+        self._register_property_label("input_device", audio_section.addRow("Input Device:", audio_input_layout))
 
         audio_file_layout = QHBoxLayout()
-        self.audio_file_label = QLabel("No audio loaded")
+        self.audio_file_label = QLabel(self._tr("no_audio_loaded"))
         self.audio_file_label.setStyleSheet("color: #666; font-style: italic;")
         audio_file_layout.addWidget(self.audio_file_label, 1)
 
-        self.import_audio_btn = QPushButton("...")
-        self.import_audio_btn.setToolTip("Import Audio File")
-        self.import_audio_btn.setFixedWidth(30)
+        self.import_audio_btn = QPushButton()
+        self.import_audio_btn.setFixedSize(28, 28)
+        self._configure_icon_button(
+            self.import_audio_btn,
+            QStyle.StandardPixmap.SP_ArrowUp,
+            "Import Audio File",
+        )
         self.import_audio_btn.clicked.connect(self.import_audio)
         audio_file_layout.addWidget(self.import_audio_btn)
 
-        self.remove_audio_btn = QPushButton("X")
-        self.remove_audio_btn.setToolTip("Remove Audio")
-        self.remove_audio_btn.setFixedWidth(30)
+        self.remove_audio_btn = QPushButton()
+        self.remove_audio_btn.setFixedSize(28, 28)
+        self._configure_icon_button(
+            self.remove_audio_btn,
+            QStyle.StandardPixmap.SP_TitleBarCloseButton,
+            "Remove Audio",
+        )
         self.remove_audio_btn.clicked.connect(self.remove_audio)
         self.remove_audio_btn.setEnabled(False)
         audio_file_layout.addWidget(self.remove_audio_btn)
-        audio_section.addRow("Audio File:", audio_file_layout)
+        self._register_property_label("audio_file", audio_section.addRow("Audio File:", audio_file_layout))
 
         offset_layout = QHBoxLayout()
+        offset_layout.setSpacing(6)
         self.audio_offset_slider = QSlider(Qt.Orientation.Horizontal)
         self.audio_offset_slider.setMinimum(-100)
         self.audio_offset_slider.setMaximum(100)
         self.audio_offset_slider.setValue(0)
         self.audio_offset_slider.valueChanged.connect(self.update_audio_offset)
         self.audio_offset_label = QLabel("0.0s")
-        self.audio_offset_label.setMinimumWidth(40)
+        self.audio_offset_label.setFixedWidth(40)
         offset_layout.addWidget(self.audio_offset_slider)
         offset_layout.addWidget(self.audio_offset_label)
-        audio_section.addRow("Sync Offset:", offset_layout)
+        self._register_property_label("sync_offset", audio_section.addRow("Sync Offset:", offset_layout))
 
         export_text_section = self._create_property_section("web_export_text", "Web Export Text")
         self.tutorial_title_input = QLineEdit()
         self.tutorial_title_input.editingFinished.connect(self.update_export_text_fields)
-        export_text_section.addRow("Tutorial Title:", self.tutorial_title_input)
+        self._register_property_label("tutorial_title", export_text_section.addRow("Tutorial Title:", self.tutorial_title_input))
 
         self.start_subtitle_input = QLineEdit()
         self.start_subtitle_input.editingFinished.connect(self.update_export_text_fields)
-        export_text_section.addRow("Start Subtitle:", self.start_subtitle_input)
+        self._register_property_label("start_subtitle", export_text_section.addRow("Start Subtitle:", self.start_subtitle_input))
 
         self.start_button_input = QLineEdit()
         self.start_button_input.editingFinished.connect(self.update_export_text_fields)
-        export_text_section.addRow("Start Button:", self.start_button_input)
+        self._register_property_label("start_button", export_text_section.addRow("Start Button:", self.start_button_input))
 
         self.completion_title_input = QLineEdit()
         self.completion_title_input.editingFinished.connect(self.update_export_text_fields)
-        export_text_section.addRow("Completion Title:", self.completion_title_input)
+        self._register_property_label("completion_title", export_text_section.addRow("Completion Title:", self.completion_title_input))
 
         self.completion_subtitle_input = QLineEdit()
         self.completion_subtitle_input.editingFinished.connect(self.update_export_text_fields)
-        export_text_section.addRow("Completion Subtitle:", self.completion_subtitle_input)
+        self._register_property_label("completion_subtitle", export_text_section.addRow("Completion Subtitle:", self.completion_subtitle_input))
 
         self.restart_button_input = QLineEdit()
         self.restart_button_input.editingFinished.connect(self.update_export_text_fields)
-        export_text_section.addRow("Restart Button:", self.restart_button_input)
+        self._register_property_label("restart_button", export_text_section.addRow("Restart Button:", self.restart_button_input))
+
+        guide_card_section = self._create_property_section("guide_card", "Guide Card")
+
+        self.guide_language_combo = QComboBox()
+        self.guide_language_combo.addItem("Korean", "ko")
+        self.guide_language_combo.addItem("English", "en")
+        self.guide_language_combo.currentIndexChanged.connect(self.update_export_text_fields)
+        self._register_property_label("language", guide_card_section.addRow("Language:", self.guide_language_combo))
+
+        guide_character_layout = QHBoxLayout()
+        self.guide_character_label = QLabel(self._tr("no_character_image"))
+        self.guide_character_label.setStyleSheet("color: #666; font-style: italic;")
+        guide_character_layout.addWidget(self.guide_character_label, 1)
+        self.guide_character_browse_btn = QPushButton()
+        self.guide_character_browse_btn.setFixedSize(28, 28)
+        self._configure_icon_button(
+            self.guide_character_browse_btn,
+            QStyle.StandardPixmap.SP_ArrowUp,
+            "Import guide character image",
+        )
+        self.guide_character_browse_btn.clicked.connect(self.import_guide_character_image)
+        guide_character_layout.addWidget(self.guide_character_browse_btn)
+        self.remove_guide_character_btn = QPushButton()
+        self.remove_guide_character_btn.setFixedSize(28, 28)
+        self._configure_icon_button(
+            self.remove_guide_character_btn,
+            QStyle.StandardPixmap.SP_TitleBarCloseButton,
+            "Remove character image",
+        )
+        self.remove_guide_character_btn.clicked.connect(self.remove_guide_character_image)
+        self.remove_guide_character_btn.setEnabled(False)
+        guide_character_layout.addWidget(self.remove_guide_character_btn)
+        self._register_property_label("default_image", guide_card_section.addRow("Default Image:", guide_character_layout))
+        self._register_property_label("step_card_image", guide_card_section.addRow("Step Card Image:", self.step_guide_image_layout))
+
+        self.guide_character_size_spin = PropertySpinBox()
+        self._configure_property_spinbox(self.guide_character_size_spin)
+        self.guide_character_size_spin.setRange(48, 320)
+        self.guide_character_size_spin.setSingleStep(1)
+        self.guide_character_size_spin.valueChanged.connect(self.update_export_text_fields)
+        self._register_property_label("character_size", guide_card_section.addRow("Character Size:", self.guide_character_size_spin))
+
+        self.guide_card_anchor_combo = QComboBox()
+        self.guide_card_anchor_combo.addItem("Fixed Top", "top_fixed")
+        self.guide_card_anchor_combo.addItem("Near Action", "follow_action")
+        self.guide_card_anchor_combo.currentIndexChanged.connect(self.update_export_text_fields)
+        self._register_property_label("card_anchor", guide_card_section.addRow("Card Anchor:", self.guide_card_anchor_combo))
+
+        self.guide_card_direction_combo = QComboBox()
+        self.guide_card_direction_combo.addItem("Auto", "auto")
+        self.guide_card_direction_combo.addItem("Right", "right")
+        self.guide_card_direction_combo.addItem("Left", "left")
+        self.guide_card_direction_combo.addItem("Above", "top")
+        self.guide_card_direction_combo.addItem("Below", "bottom")
+        self.guide_card_direction_combo.currentIndexChanged.connect(self.update_export_text_fields)
+        self._register_property_label("card_direction", guide_card_section.addRow("Card Direction:", self.guide_card_direction_combo))
+
+        self.guide_card_offset_spin = PropertySpinBox()
+        self._configure_property_spinbox(self.guide_card_offset_spin)
+        self.guide_card_offset_spin.setRange(0, 120)
+        self.guide_card_offset_spin.setSingleStep(1)
+        self.guide_card_offset_spin.valueChanged.connect(self.update_export_text_fields)
+        self._register_property_label("card_offset", guide_card_section.addRow("Card Offset:", self.guide_card_offset_spin))
+
+        self.guide_card_top_spin = PropertySpinBox()
+        self._configure_property_spinbox(self.guide_card_top_spin)
+        self.guide_card_top_spin.setRange(-200, 200)
+        self.guide_card_top_spin.setSingleStep(1)
+        self.guide_card_top_spin.setSuffix(" px")
+        self.guide_card_top_spin.valueChanged.connect(self.update_export_text_fields)
+        self._register_property_label("vertical_offset", guide_card_section.addRow("Vertical Offset:", self.guide_card_top_spin))
+
+        self.guide_card_left_spin = PropertySpinBox()
+        self._configure_property_spinbox(self.guide_card_left_spin)
+        self.guide_card_left_spin.setRange(-400, 400)
+        self.guide_card_left_spin.setSingleStep(1)
+        self.guide_card_left_spin.setSuffix(" px")
+        self.guide_card_left_spin.valueChanged.connect(self.update_export_text_fields)
+        self._register_property_label("horizontal_offset", guide_card_section.addRow("Horizontal Offset:", self.guide_card_left_spin))
+
+        self.guide_card_width_spin = PropertySpinBox()
+        self._configure_property_spinbox(self.guide_card_width_spin)
+        self.guide_card_width_spin.setRange(280, 1200)
+        self.guide_card_width_spin.setSingleStep(4)
+        self.guide_card_width_spin.setSuffix(" px")
+        self.guide_card_width_spin.valueChanged.connect(self.update_export_text_fields)
+        self._register_property_label("card_width", guide_card_section.addRow("Card Width:", self.guide_card_width_spin))
+
+        self.guide_card_scale_spin = PropertySpinBox()
+        self._configure_property_spinbox(self.guide_card_scale_spin)
+        self.guide_card_scale_spin.setRange(50, 200)
+        self.guide_card_scale_spin.setSingleStep(5)
+        self.guide_card_scale_spin.setSuffix("%")
+        self.guide_card_scale_spin.valueChanged.connect(self.update_export_text_fields)
+        self._register_property_label("card_scale", guide_card_section.addRow("Card Scale:", self.guide_card_scale_spin))
+
+        self.guide_step_badge_size_spin = PropertySpinBox()
+        self._configure_property_spinbox(self.guide_step_badge_size_spin)
+        self.guide_step_badge_size_spin.setRange(40, 180)
+        self.guide_step_badge_size_spin.setSingleStep(1)
+        self.guide_step_badge_size_spin.setSuffix(" px")
+        self.guide_step_badge_size_spin.valueChanged.connect(self.update_export_text_fields)
+        self._register_property_label("badge_size", guide_card_section.addRow("Badge Size:", self.guide_step_badge_size_spin))
+
+        self.guide_card_gap_spin = PropertySpinBox()
+        self._configure_property_spinbox(self.guide_card_gap_spin)
+        self.guide_card_gap_spin.setRange(0, 80)
+        self.guide_card_gap_spin.setSingleStep(1)
+        self.guide_card_gap_spin.valueChanged.connect(self.update_export_text_fields)
+        self._register_property_label("character_gap", guide_card_section.addRow("Character Gap:", self.guide_card_gap_spin))
+
+        self.guide_card_padding_spin = PropertySpinBox()
+        self._configure_property_spinbox(self.guide_card_padding_spin)
+        self.guide_card_padding_spin.setRange(10, 48)
+        self.guide_card_padding_spin.setSingleStep(1)
+        self.guide_card_padding_spin.valueChanged.connect(self.update_export_text_fields)
+        self._register_property_label("card_padding", guide_card_section.addRow("Card Padding:", self.guide_card_padding_spin))
+
+        self.guide_card_opacity_spin = PropertySpinBox()
+        self._configure_property_spinbox(self.guide_card_opacity_spin)
+        self.guide_card_opacity_spin.setRange(0, 100)
+        self.guide_card_opacity_spin.setSingleStep(1)
+        self.guide_card_opacity_spin.setSuffix("%")
+        self.guide_card_opacity_spin.valueChanged.connect(self.update_export_text_fields)
+        self._register_property_label("card_opacity", guide_card_section.addRow("Card Opacity:", self.guide_card_opacity_spin))
 
         self.props_container_layout.addStretch()
         props_scroll.setWidget(props_widget)
         self.props_dock.setWidget(props_scroll)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.props_dock)
+        self.retranslate_properties_panel()
         
         # ==================== Timeline Panel (Bottom Dock) ====================
         self.timeline_dock = QDockWidget("Timeline", self)
@@ -2501,7 +3291,7 @@ class Editor(QMainWindow):
             self.audio_file_label.setStyleSheet("color: #0a0; font-style: normal;")
             self.remove_audio_btn.setEnabled(True)
         else:
-            self.audio_file_label.setText("No audio loaded")
+            self.audio_file_label.setText(self._tr("no_audio_loaded"))
             self.audio_file_label.setStyleSheet("color: #666; font-style: italic;")
             self.remove_audio_btn.setEnabled(False)
 
@@ -2514,6 +3304,19 @@ class Editor(QMainWindow):
         self.completion_title_input.blockSignals(True)
         self.completion_subtitle_input.blockSignals(True)
         self.restart_button_input.blockSignals(True)
+        self.guide_language_combo.blockSignals(True)
+        self.guide_character_size_spin.blockSignals(True)
+        self.guide_card_anchor_combo.blockSignals(True)
+        self.guide_card_direction_combo.blockSignals(True)
+        self.guide_card_offset_spin.blockSignals(True)
+        self.guide_card_top_spin.blockSignals(True)
+        self.guide_card_left_spin.blockSignals(True)
+        self.guide_card_width_spin.blockSignals(True)
+        self.guide_card_scale_spin.blockSignals(True)
+        self.guide_step_badge_size_spin.blockSignals(True)
+        self.guide_card_gap_spin.blockSignals(True)
+        self.guide_card_padding_spin.blockSignals(True)
+        self.guide_card_opacity_spin.blockSignals(True)
 
         self.tutorial_title_input.setText(self.tutorial.title)
         self.start_subtitle_input.setText(self.tutorial.start_subtitle)
@@ -2521,6 +3324,31 @@ class Editor(QMainWindow):
         self.completion_title_input.setText(self.tutorial.completion_title)
         self.completion_subtitle_input.setText(self.tutorial.completion_subtitle)
         self.restart_button_input.setText(self.tutorial.restart_button_text)
+        guide_language_index = self.guide_language_combo.findData(getattr(self.tutorial, "guide_language", "ko"))
+        self.guide_language_combo.setCurrentIndex(guide_language_index if guide_language_index >= 0 else 0)
+        self.guide_character_size_spin.setValue(int(getattr(self.tutorial, "guide_character_size", 112) or 112))
+        guide_anchor_index = self.guide_card_anchor_combo.findData(getattr(self.tutorial, "guide_card_anchor", "top_fixed"))
+        self.guide_card_anchor_combo.setCurrentIndex(guide_anchor_index if guide_anchor_index >= 0 else 0)
+        guide_direction_index = self.guide_card_direction_combo.findData(getattr(self.tutorial, "guide_card_direction", "auto"))
+        self.guide_card_direction_combo.setCurrentIndex(guide_direction_index if guide_direction_index >= 0 else 0)
+        self.guide_card_offset_spin.setValue(int(getattr(self.tutorial, "guide_card_offset", 16) or 16))
+        self.guide_card_top_spin.setValue(int(getattr(self.tutorial, "guide_card_top", 0) or 0))
+        self.guide_card_left_spin.setValue(int(getattr(self.tutorial, "guide_card_left", 0) or 0))
+        self.guide_card_width_spin.setValue(int(getattr(self.tutorial, "guide_card_width", 680) or 680))
+        self.guide_card_scale_spin.setValue(int(getattr(self.tutorial, "guide_card_scale_percent", 100) or 100))
+        self.guide_step_badge_size_spin.setValue(int(getattr(self.tutorial, "guide_step_badge_size", 96) or 96))
+        self.guide_card_gap_spin.setValue(int(getattr(self.tutorial, "guide_card_gap", 18) or 18))
+        self.guide_card_padding_spin.setValue(int(getattr(self.tutorial, "guide_card_padding", 22) or 22))
+        self.guide_card_opacity_spin.setValue(int(getattr(self.tutorial, "guide_card_opacity", 94) or 94))
+        if getattr(self.tutorial, "guide_character_image_path", ""):
+            filename = os.path.basename(self.tutorial.guide_character_image_path)
+            self.guide_character_label.setText(filename)
+            self.guide_character_label.setStyleSheet("color: #0a0; font-style: normal;")
+            self.remove_guide_character_btn.setEnabled(True)
+        else:
+            self.guide_character_label.setText(self._tr("no_character_image"))
+            self.guide_character_label.setStyleSheet("color: #666; font-style: italic;")
+            self.remove_guide_character_btn.setEnabled(False)
 
         self.tutorial_title_input.blockSignals(False)
         self.start_subtitle_input.blockSignals(False)
@@ -2528,6 +3356,19 @@ class Editor(QMainWindow):
         self.completion_title_input.blockSignals(False)
         self.completion_subtitle_input.blockSignals(False)
         self.restart_button_input.blockSignals(False)
+        self.guide_language_combo.blockSignals(False)
+        self.guide_character_size_spin.blockSignals(False)
+        self.guide_card_anchor_combo.blockSignals(False)
+        self.guide_card_direction_combo.blockSignals(False)
+        self.guide_card_offset_spin.blockSignals(False)
+        self.guide_card_top_spin.blockSignals(False)
+        self.guide_card_left_spin.blockSignals(False)
+        self.guide_card_width_spin.blockSignals(False)
+        self.guide_card_scale_spin.blockSignals(False)
+        self.guide_step_badge_size_spin.blockSignals(False)
+        self.guide_card_gap_spin.blockSignals(False)
+        self.guide_card_padding_spin.blockSignals(False)
+        self.guide_card_opacity_spin.blockSignals(False)
 
     def update_export_text_fields(self):
         """Update tutorial-level text used by web exports."""
@@ -2537,6 +3378,19 @@ class Editor(QMainWindow):
         self.tutorial.completion_title = self.completion_title_input.text() or "튜토리얼 완료"
         self.tutorial.completion_subtitle = self.completion_subtitle_input.text()
         self.tutorial.restart_button_text = self.restart_button_input.text() or "다시 시작"
+        self.tutorial.guide_language = self.guide_language_combo.currentData() or "ko"
+        self.tutorial.guide_character_size = self.guide_character_size_spin.value()
+        self.tutorial.guide_card_anchor = self.guide_card_anchor_combo.currentData() or "top_fixed"
+        self.tutorial.guide_card_direction = self.guide_card_direction_combo.currentData() or "auto"
+        self.tutorial.guide_card_offset = self.guide_card_offset_spin.value()
+        self.tutorial.guide_card_top = self.guide_card_top_spin.value()
+        self.tutorial.guide_card_left = self.guide_card_left_spin.value()
+        self.tutorial.guide_card_width = self.guide_card_width_spin.value()
+        self.tutorial.guide_card_scale_percent = self.guide_card_scale_spin.value()
+        self.tutorial.guide_step_badge_size = self.guide_step_badge_size_spin.value()
+        self.tutorial.guide_card_gap = self.guide_card_gap_spin.value()
+        self.tutorial.guide_card_padding = self.guide_card_padding_spin.value()
+        self.tutorial.guide_card_opacity = self.guide_card_opacity_spin.value()
         self.save_state()
 
     def refresh(self):
@@ -2568,6 +3422,7 @@ class Editor(QMainWindow):
             return
 
         with QSignalBlocker(self.step_list):
+            self.step_list.clearSelection()
             self.step_list.setCurrentRow(index)
 
         item = self.step_list.item(index)
@@ -2580,6 +3435,7 @@ class Editor(QMainWindow):
 
     def load_step(self, index):
         if index < 0 or index >= len(self.tutorial.steps):
+            self._clear_drag_gif_preview(self._tr("drag_preview"))
             return
         step = self.tutorial.steps[index]
         
@@ -2594,6 +3450,7 @@ class Editor(QMainWindow):
         self.instruction_input.blockSignals(True)
         self.instruction_input.setPlainText(step.instruction)
         self.instruction_input.blockSignals(False)
+        self._sync_step_guide_image_ui(step)
         
         self.radio_rect.blockSignals(True)
         self.radio_circle.blockSignals(True)
@@ -2620,6 +3477,12 @@ class Editor(QMainWindow):
         self.text_content.setText(step.keyboard_input)
         self.text_content.blockSignals(False)
         self.text_content.setEnabled(is_keyboard)
+
+        self.keyboard_space_behavior_combo.blockSignals(True)
+        space_behavior_index = self.keyboard_space_behavior_combo.findData(getattr(step, "keyboard_space_behavior", "submit_step"))
+        self.keyboard_space_behavior_combo.setCurrentIndex(space_behavior_index if space_behavior_index >= 0 else 0)
+        self.keyboard_space_behavior_combo.blockSignals(False)
+        self.keyboard_space_behavior_combo.setEnabled(is_keyboard and step.keyboard_mode == "text")
         if is_keyboard:
             self.text_content.setPlaceholderText(
                 "Literal text to type"
@@ -2630,6 +3493,12 @@ class Editor(QMainWindow):
         self.font_size_spinbox.blockSignals(True)
         self.font_size_spinbox.setValue(step.text_font_size)
         self.font_size_spinbox.blockSignals(False)
+
+        self.font_weight_combo.blockSignals(True)
+        current_weight = "Bold" if (getattr(step, "text_font_weight", "normal") or "normal").lower() == "bold" else "Normal"
+        weight_index = self.font_weight_combo.findData(current_weight)
+        self.font_weight_combo.setCurrentIndex(weight_index if weight_index >= 0 else 0)
+        self.font_weight_combo.blockSignals(False)
         self.font_size_spinbox.setEnabled(is_keyboard)
         
         self.text_color_input.blockSignals(True)
@@ -2676,11 +3545,61 @@ class Editor(QMainWindow):
         self.hitbox_fill_opacity_label.setText(f"{step.hitbox_fill_opacity}%")
         self.hitbox_fill_opacity_slider.blockSignals(False)
         self.hitbox_fill_opacity_slider.setEnabled(is_click)
-        
+
         # Update fill color preview with opacity
         if step.hitbox_fill_color and step.hitbox_fill_color.startswith("#") and len(step.hitbox_fill_color) >= 7:
             opacity = step.hitbox_fill_opacity / 100.0
             self.hitbox_fill_color_preview.setStyleSheet(f"background: {step.hitbox_fill_color[:7]}; opacity: {opacity}; border: 1px solid #555; border-radius: 3px;")
+
+        is_drag = step.action_type == "mouse_drag"
+        self.drag_button_combo.blockSignals(True)
+        drag_button_index = self.drag_button_combo.findData(getattr(step, "drag_button", "left"))
+        self.drag_button_combo.setCurrentIndex(drag_button_index if drag_button_index >= 0 else 0)
+        self.drag_button_combo.blockSignals(False)
+        self.drag_button_combo.setEnabled(is_drag)
+
+        self.drag_min_distance_spin.blockSignals(True)
+        self.drag_min_distance_spin.setValue(int(getattr(step, "drag_min_distance", 30) or 30))
+        self.drag_min_distance_spin.blockSignals(False)
+        self.drag_min_distance_spin.setEnabled(is_drag)
+
+        auto_drag_gif_enabled = bool(getattr(step, "auto_drag_gif_enabled", True))
+        self.auto_drag_gif_checkbox.blockSignals(True)
+        self.auto_drag_gif_checkbox.setChecked(auto_drag_gif_enabled)
+        self.auto_drag_gif_checkbox.blockSignals(False)
+        self.auto_drag_gif_checkbox.setEnabled(is_drag)
+
+        self.drag_gif_lead_spin.blockSignals(True)
+        self.drag_gif_lead_spin.setValue(int(round(float(getattr(step, "drag_gif_lead_seconds", 0.6) or 0.0) * 1000)))
+        self.drag_gif_lead_spin.blockSignals(False)
+        self.drag_gif_lead_spin.setEnabled(is_drag and auto_drag_gif_enabled)
+
+        self.drag_gif_tail_spin.blockSignals(True)
+        self.drag_gif_tail_spin.setValue(int(round(float(getattr(step, "drag_gif_tail_seconds", 0.15) or 0.0) * 1000)))
+        self.drag_gif_tail_spin.blockSignals(False)
+        self.drag_gif_tail_spin.setEnabled(is_drag and auto_drag_gif_enabled)
+
+        self.drag_gif_fps_spin.blockSignals(True)
+        self.drag_gif_fps_spin.setValue(int(round(float(getattr(step, "drag_gif_fps", 8.0) or 8.0))))
+        self.drag_gif_fps_spin.blockSignals(False)
+        self.drag_gif_fps_spin.setEnabled(is_drag and auto_drag_gif_enabled)
+
+        self.drag_gif_size_spin.blockSignals(True)
+        self.drag_gif_size_spin.setValue(int(getattr(step, "drag_gif_preview_size", 260) or 260))
+        self.drag_gif_size_spin.blockSignals(False)
+        self.drag_gif_size_spin.setEnabled(is_drag)
+
+        self.drag_arrow_enabled_checkbox.blockSignals(True)
+        self.drag_arrow_enabled_checkbox.setChecked(bool(getattr(step, "drag_direction_arrow_enabled", True)))
+        self.drag_arrow_enabled_checkbox.blockSignals(False)
+        self.drag_arrow_enabled_checkbox.setEnabled(is_drag)
+
+        self.drag_arrow_size_spin.blockSignals(True)
+        self.drag_arrow_size_spin.setValue(int(getattr(step, "drag_direction_arrow_size", 16) or 16))
+        self.drag_arrow_size_spin.blockSignals(False)
+        self.drag_arrow_size_spin.setEnabled(is_drag and bool(getattr(step, "drag_direction_arrow_enabled", True)))
+
+        self._update_drag_gif_preview(step)
 
     def update_view_source(self):
         idx = self.step_list.currentRow()
@@ -2750,6 +3669,129 @@ class Editor(QMainWindow):
         if idx >= 0:
             self.tutorial.steps[idx].instruction = self.instruction_input.toPlainText()
             self.save_state()
+
+    def _sync_step_guide_image_ui(self, step):
+        guide_image_path = getattr(step, "guide_image_path", "") if step else ""
+        if guide_image_path:
+            self.step_guide_image_label.setText(os.path.basename(guide_image_path))
+            self.step_guide_image_label.setStyleSheet("color: #0a0; font-style: normal;")
+            self.remove_step_guide_image_btn.setEnabled(True)
+        else:
+            self.step_guide_image_label.setText(self._tr("default_character"))
+            self.step_guide_image_label.setStyleSheet("color: #666; font-style: italic;")
+            self.remove_step_guide_image_btn.setEnabled(False)
+
+    def _clear_drag_gif_preview(self, message=None):
+        if message is None:
+            message = self._tr("drag_preview")
+        if self._drag_preview_movie is not None:
+            self._drag_preview_movie.stop()
+            self.drag_gif_preview.setMovie(None)
+            self._drag_preview_movie = None
+        if self._drag_preview_temp_path and os.path.exists(self._drag_preview_temp_path):
+            try:
+                os.remove(self._drag_preview_temp_path)
+            except OSError:
+                pass
+        self._drag_preview_temp_path = None
+        self.drag_gif_preview.clear()
+        self.drag_gif_preview.setText(message)
+
+    def _cancel_drag_preview_request(self):
+        self._drag_preview_request_id += 1
+        self._drag_preview_step_id = ""
+
+    def _on_drag_gif_preview_ready(self, request_id: int, step_id: str, gif_bytes):
+        worker = self._drag_preview_workers.pop(request_id, None)
+        if worker is not None:
+            worker.deleteLater()
+
+        if request_id != self._drag_preview_request_id or step_id != self._drag_preview_step_id:
+            return
+
+        current_idx = self.step_list.currentRow()
+        if not (0 <= current_idx < len(self.tutorial.steps)):
+            self._clear_drag_gif_preview(self._tr("drag_preview"))
+            return
+
+        step = self.tutorial.steps[current_idx]
+        if step.action_type != "mouse_drag" or step.id != step_id:
+            return
+
+        preview_size = int(getattr(step, "drag_gif_preview_size", 260) or 260)
+        if gif_bytes:
+            self._clear_drag_gif_preview("")
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".gif")
+            temp_file.write(gif_bytes)
+            temp_file.close()
+            self._drag_preview_temp_path = temp_file.name
+            movie = QMovie(temp_file.name)
+            movie.setScaledSize(QSize(preview_size, preview_size))
+            self.drag_gif_preview.setMovie(movie)
+            movie.start()
+            self._drag_preview_movie = movie
+            return
+
+        self._clear_drag_gif_preview(self._tr("drag_preview"))
+
+    def _update_drag_gif_preview(self, step):
+        if not step or step.action_type != "mouse_drag":
+            self._cancel_drag_preview_request()
+            self._clear_drag_gif_preview(self._tr("drag_preview"))
+            return
+
+        preview_size = int(getattr(step, "drag_gif_preview_size", 260) or 260)
+        self.drag_gif_preview.setFixedHeight(max(120, preview_size + 24))
+        gif_path = getattr(step, "guide_image_path", "") or ""
+
+        if gif_path and os.path.exists(gif_path) and gif_path.lower().endswith(".gif"):
+            self._clear_drag_gif_preview("")
+            movie = QMovie(gif_path)
+            movie.setScaledSize(QSize(preview_size, preview_size))
+            self.drag_gif_preview.setMovie(movie)
+            movie.start()
+            self._drag_preview_movie = movie
+            return
+
+        self._drag_preview_request_id += 1
+        request_id = self._drag_preview_request_id
+        self._drag_preview_step_id = step.id
+        self._clear_drag_gif_preview("Generating drag GIF preview...")
+
+        worker = DragGifPreviewWorker(
+            request_id=request_id,
+            step_id=step.id,
+            video_path=getattr(self.tutorial, "video_path", "") or "",
+            step_data=step.model_dump(),
+        )
+        worker.preview_ready.connect(self._on_drag_gif_preview_ready)
+        self._drag_preview_workers[request_id] = worker
+        worker.start()
+
+    def import_step_guide_image(self):
+        idx = self.step_list.currentRow()
+        if idx < 0 or idx >= len(self.tutorial.steps):
+            return
+
+        image_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Step Card Image",
+            "",
+            "Images (*.png *.jpg *.jpeg *.bmp *.webp *.gif);;All Files (*)",
+        )
+        if image_path:
+            self.tutorial.steps[idx].guide_image_path = image_path
+            self._sync_step_guide_image_ui(self.tutorial.steps[idx])
+            self.save_state()
+
+    def remove_step_guide_image(self):
+        idx = self.step_list.currentRow()
+        if idx < 0 or idx >= len(self.tutorial.steps):
+            return
+
+        self.tutorial.steps[idx].guide_image_path = ""
+        self._sync_step_guide_image_ui(self.tutorial.steps[idx])
+        self.save_state()
             
     def get_selected_indices(self):
         """Get list of selected step indices."""
@@ -2817,8 +3859,7 @@ class Editor(QMainWindow):
             if 0 <= idx < len(self.tutorial.steps):
                 step = self.tutorial.steps[idx]
                 step.keyboard_input = text
-                if step.action_type == "keyboard" and step.keyboard_mode == "key" and text:
-                    step.description = f"Press {display_key_name(text)}"
+                self._normalize_keyboard_step(step)
         
         self.canvas.update()
 
@@ -2834,6 +3875,7 @@ class Editor(QMainWindow):
             if mode == "text"
             else "Key name like esc, enter, f5, left"
         )
+        self.keyboard_space_behavior_combo.setEnabled(mode == "text")
 
         for idx in selected:
             if 0 <= idx < len(self.tutorial.steps):
@@ -2841,13 +3883,26 @@ class Editor(QMainWindow):
                 if step.action_type != "keyboard":
                     continue
                 step.keyboard_mode = mode
-                if mode == "key" and step.keyboard_input:
-                    step.description = f"Press {display_key_name(step.keyboard_input)}"
-                elif mode == "text" and step.description.startswith("Press "):
-                    step.description = "Type text"
+                self._normalize_keyboard_step(step)
 
-        self.refresh_ui()
+        self.refresh()
         self.canvas.update()
+        self.save_state()
+
+    def update_keyboard_space_behavior(self):
+        """Update whether space inserts a character or submits keyboard text steps."""
+        selected = self.get_selected_indices()
+        if not selected:
+            return
+
+        space_behavior = self.keyboard_space_behavior_combo.currentData() or "insert_space"
+        for idx in selected:
+            if 0 <= idx < len(self.tutorial.steps):
+                step = self.tutorial.steps[idx]
+                if step.action_type != "keyboard" or step.keyboard_mode != "text":
+                    continue
+                step.keyboard_space_behavior = space_behavior
+
         self.save_state()
     
     def update_text_style_preview(self):
@@ -2861,6 +3916,7 @@ class Editor(QMainWindow):
             font_size = self.font_size_spinbox.value()
         except ValueError:
             font_size = 24
+        font_weight = self.font_weight_combo.currentData() or "Normal"
         
         text_color = self.text_color_input.text() or "#FFFFFF"
         bg_color = self.bg_color_input.text() or "#000000"
@@ -2869,6 +3925,7 @@ class Editor(QMainWindow):
             if 0 <= idx < len(self.tutorial.steps):
                 step = self.tutorial.steps[idx]
                 step.text_font_size = font_size
+                step.text_font_weight = "bold" if str(font_weight).lower() == "bold" else "normal"
                 step.text_color = text_color
                 step.text_bg_color = bg_color
         
@@ -2924,6 +3981,136 @@ class Editor(QMainWindow):
                 self.tutorial.steps[idx].hitbox_fill_opacity = value
         self.canvas.update()
         self.save_state()
+
+    def update_drag_button(self):
+        """Update drag mouse button for selected drag steps."""
+        selected = self.get_selected_indices()
+        if not selected:
+            return
+
+        drag_button = self.drag_button_combo.currentData() or "left"
+        for idx in selected:
+            if 0 <= idx < len(self.tutorial.steps):
+                step = self.tutorial.steps[idx]
+                if step.action_type == "mouse_drag":
+                    step.drag_button = drag_button
+        self.save_state()
+        self.load_step(self.step_list.currentRow())
+
+    def update_drag_min_distance(self, value):
+        """Update drag minimum distance for selected drag steps."""
+        selected = self.get_selected_indices()
+        if not selected:
+            return
+
+        for idx in selected:
+            if 0 <= idx < len(self.tutorial.steps):
+                step = self.tutorial.steps[idx]
+                if step.action_type == "mouse_drag":
+                    step.drag_min_distance = int(value)
+        self.save_state()
+        self.load_step(self.step_list.currentRow())
+
+    def update_auto_drag_gif_enabled(self, checked):
+        """Toggle automatic drag GIF generation for selected drag steps."""
+        selected = self.get_selected_indices()
+        if not selected:
+            return
+
+        for idx in selected:
+            if 0 <= idx < len(self.tutorial.steps):
+                step = self.tutorial.steps[idx]
+                if step.action_type == "mouse_drag":
+                    step.auto_drag_gif_enabled = bool(checked)
+
+        current_is_drag = False
+        current_idx = self.step_list.currentRow()
+        if 0 <= current_idx < len(self.tutorial.steps):
+            current_is_drag = self.tutorial.steps[current_idx].action_type == "mouse_drag"
+        self.drag_gif_lead_spin.setEnabled(current_is_drag and bool(checked))
+        self.drag_gif_tail_spin.setEnabled(current_is_drag and bool(checked))
+        self.drag_gif_fps_spin.setEnabled(current_is_drag and bool(checked))
+        self.save_state()
+        self.load_step(self.step_list.currentRow())
+
+    def update_drag_gif_timing(self):
+        """Update automatic drag GIF lead/tail timing for selected drag steps."""
+        selected = self.get_selected_indices()
+        if not selected:
+            return
+
+        lead_seconds = self.drag_gif_lead_spin.value() / 1000.0
+        tail_seconds = self.drag_gif_tail_spin.value() / 1000.0
+        for idx in selected:
+            if 0 <= idx < len(self.tutorial.steps):
+                step = self.tutorial.steps[idx]
+                if step.action_type == "mouse_drag":
+                    step.drag_gif_lead_seconds = lead_seconds
+                    step.drag_gif_tail_seconds = tail_seconds
+        self.save_state()
+        self.load_step(self.step_list.currentRow())
+
+    def update_drag_gif_size(self, value):
+        """Update drag GIF preview/export size for selected drag steps."""
+        selected = self.get_selected_indices()
+        if not selected:
+            return
+
+        for idx in selected:
+            if 0 <= idx < len(self.tutorial.steps):
+                step = self.tutorial.steps[idx]
+                if step.action_type == "mouse_drag":
+                    step.drag_gif_preview_size = int(value)
+        self.save_state()
+        self.load_step(self.step_list.currentRow())
+
+    def update_drag_gif_fps(self, value):
+        """Update automatic drag GIF frame rate for selected drag steps."""
+        selected = self.get_selected_indices()
+        if not selected:
+            return
+
+        for idx in selected:
+            if 0 <= idx < len(self.tutorial.steps):
+                step = self.tutorial.steps[idx]
+                if step.action_type == "mouse_drag":
+                    step.drag_gif_fps = float(value)
+        self.save_state()
+        self.load_step(self.step_list.currentRow())
+
+    def update_drag_direction_arrow_enabled(self, checked):
+        """Toggle drag direction arrow for selected drag steps."""
+        selected = self.get_selected_indices()
+        if not selected:
+            return
+
+        for idx in selected:
+            if 0 <= idx < len(self.tutorial.steps):
+                step = self.tutorial.steps[idx]
+                if step.action_type == "mouse_drag":
+                    step.drag_direction_arrow_enabled = bool(checked)
+
+        current_is_drag = False
+        current_idx = self.step_list.currentRow()
+        if 0 <= current_idx < len(self.tutorial.steps):
+            current_is_drag = self.tutorial.steps[current_idx].action_type == "mouse_drag"
+        self.drag_arrow_size_spin.setEnabled(current_is_drag and bool(checked))
+        self.save_state()
+        self.load_step(self.step_list.currentRow())
+
+    def update_drag_direction_arrow_size(self, value):
+        """Update drag direction arrow size for selected drag steps."""
+        selected = self.get_selected_indices()
+        if not selected:
+            return
+
+        for idx in selected:
+            if 0 <= idx < len(self.tutorial.steps):
+                step = self.tutorial.steps[idx]
+                if step.action_type == "mouse_drag":
+                    step.drag_direction_arrow_size = int(value)
+        self.save_state()
+        self.load_step(self.step_list.currentRow())
     
     def import_audio(self):
         """Import an audio file for the tutorial."""
@@ -2948,13 +4135,35 @@ class Editor(QMainWindow):
         self.tutorial.audio_offset = 0.0
         self.tutorial.audio_trim_start = 0.0
         self.tutorial.audio_trim_end = None
-        self.audio_file_label.setText("No audio loaded")
+        self.audio_file_label.setText(self._tr("no_audio_loaded"))
         self.audio_file_label.setStyleSheet("color: #666; font-style: italic;")
         self.remove_audio_btn.setEnabled(False)
         self.audio_offset_slider.setValue(0)
         self.timeline.rebuild_scene()
         self.save_state()
         print("Audio removed")
+
+    def import_guide_character_image(self):
+        image_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Guide Character Image",
+            "",
+            "Images (*.png *.jpg *.jpeg *.bmp *.webp *.gif);;All Files (*)",
+        )
+        if image_path:
+            self.tutorial.guide_character_image_path = image_path
+            filename = os.path.basename(image_path)
+            self.guide_character_label.setText(filename)
+            self.guide_character_label.setStyleSheet("color: #0a0; font-style: normal;")
+            self.remove_guide_character_btn.setEnabled(True)
+            self.save_state()
+
+    def remove_guide_character_image(self):
+        self.tutorial.guide_character_image_path = ""
+        self.guide_character_label.setText(self._tr("no_character_image"))
+        self.guide_character_label.setStyleSheet("color: #666; font-style: italic;")
+        self.remove_guide_character_btn.setEnabled(False)
+        self.save_state()
     
     def update_audio_offset(self, value):
         """Update the audio sync offset."""
@@ -3095,6 +4304,8 @@ class Editor(QMainWindow):
 
     def closeEvent(self, event):
         self.timeline.play_timer.stop()
+        self._cancel_drag_preview_request()
+        self._clear_drag_gif_preview("")
 
         if getattr(self, "_frame_update_timer", None) is not None:
             self._frame_update_timer.stop()
@@ -3185,6 +4396,20 @@ class Editor(QMainWindow):
             'completion_title': self.tutorial.completion_title,
             'completion_subtitle': self.tutorial.completion_subtitle,
             'restart_button_text': self.tutorial.restart_button_text,
+            'guide_language': getattr(self.tutorial, 'guide_language', 'ko'),
+            'guide_character_image_path': getattr(self.tutorial, 'guide_character_image_path', ''),
+            'guide_character_size': getattr(self.tutorial, 'guide_character_size', 112),
+            'guide_card_anchor': getattr(self.tutorial, 'guide_card_anchor', 'top_fixed'),
+            'guide_card_direction': getattr(self.tutorial, 'guide_card_direction', 'auto'),
+            'guide_card_offset': getattr(self.tutorial, 'guide_card_offset', 16),
+            'guide_card_top': getattr(self.tutorial, 'guide_card_top', 0),
+            'guide_card_left': getattr(self.tutorial, 'guide_card_left', 0),
+            'guide_card_width': getattr(self.tutorial, 'guide_card_width', 680),
+            'guide_card_scale_percent': getattr(self.tutorial, 'guide_card_scale_percent', 100),
+            'guide_step_badge_size': getattr(self.tutorial, 'guide_step_badge_size', 96),
+            'guide_card_gap': getattr(self.tutorial, 'guide_card_gap', 18),
+            'guide_card_padding': getattr(self.tutorial, 'guide_card_padding', 22),
+            'guide_card_opacity': getattr(self.tutorial, 'guide_card_opacity', 94),
             'audio_input_device': self.tutorial.audio_input_device,
             'audio_input_name': self.tutorial.audio_input_name,
             'video_path': self.tutorial.video_path,
@@ -3227,6 +4452,20 @@ class Editor(QMainWindow):
         self.tutorial.completion_title = state.get('completion_title', self.tutorial.completion_title)
         self.tutorial.completion_subtitle = state.get('completion_subtitle', self.tutorial.completion_subtitle)
         self.tutorial.restart_button_text = state.get('restart_button_text', self.tutorial.restart_button_text)
+        self.tutorial.guide_language = state.get('guide_language', getattr(self.tutorial, 'guide_language', 'ko'))
+        self.tutorial.guide_character_image_path = state.get('guide_character_image_path', getattr(self.tutorial, 'guide_character_image_path', ''))
+        self.tutorial.guide_character_size = state.get('guide_character_size', getattr(self.tutorial, 'guide_character_size', 112))
+        self.tutorial.guide_card_anchor = state.get('guide_card_anchor', getattr(self.tutorial, 'guide_card_anchor', 'top_fixed'))
+        self.tutorial.guide_card_direction = state.get('guide_card_direction', getattr(self.tutorial, 'guide_card_direction', 'auto'))
+        self.tutorial.guide_card_offset = state.get('guide_card_offset', getattr(self.tutorial, 'guide_card_offset', 16))
+        self.tutorial.guide_card_top = state.get('guide_card_top', getattr(self.tutorial, 'guide_card_top', 0))
+        self.tutorial.guide_card_left = state.get('guide_card_left', getattr(self.tutorial, 'guide_card_left', 0))
+        self.tutorial.guide_card_width = state.get('guide_card_width', getattr(self.tutorial, 'guide_card_width', 680))
+        self.tutorial.guide_card_scale_percent = state.get('guide_card_scale_percent', getattr(self.tutorial, 'guide_card_scale_percent', 100))
+        self.tutorial.guide_step_badge_size = state.get('guide_step_badge_size', getattr(self.tutorial, 'guide_step_badge_size', 96))
+        self.tutorial.guide_card_gap = state.get('guide_card_gap', getattr(self.tutorial, 'guide_card_gap', 18))
+        self.tutorial.guide_card_padding = state.get('guide_card_padding', getattr(self.tutorial, 'guide_card_padding', 22))
+        self.tutorial.guide_card_opacity = state.get('guide_card_opacity', getattr(self.tutorial, 'guide_card_opacity', 94))
         self.tutorial.audio_input_device = state.get('audio_input_device', self.tutorial.audio_input_device)
         self.tutorial.audio_input_name = state.get('audio_input_name', self.tutorial.audio_input_name)
         self.tutorial.video_path = state['video_path']
@@ -3242,13 +4481,15 @@ class Editor(QMainWindow):
         """Handle keyboard shortcuts."""
         from ..settings import Settings
         settings = Settings()
+
+        if self._is_text_input_focus():
+            super().keyPressEvent(event)
+            return
         
         # Helper matches function (could be utility, but inline is fine)
         def matches(action):
-            # Use strict integer conversion for PySide6 compatibility
-            key_int = event.key()
-            mod_int = int(event.modifiers())
-            return QKeySequence(key_int | mod_int) == settings.get_key(action)
+            event_sequence = QKeySequence(event.keyCombination())
+            return event_sequence == settings.get_key(action)
         
         # Undo/Redo
         if matches("undo"):

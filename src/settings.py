@@ -13,6 +13,7 @@ class Settings:
     
     def _init(self):
         self.settings_file = "settings.json"
+        self.ui_language = "en"
         self.shortcuts = {
             "toggle_recording": "Alt+S",
             "toggle_play": "Space",
@@ -36,6 +37,8 @@ class Settings:
             try:
                 with open(self.settings_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
+                    if "ui_language" in data:
+                        self.ui_language = data["ui_language"] or "en"
                     if "shortcuts" in data:
                         self.shortcuts.update(data["shortcuts"])
             except Exception as e:
@@ -44,6 +47,7 @@ class Settings:
     def save(self):
         try:
             data = {
+                "ui_language": self.ui_language,
                 "shortcuts": self.shortcuts
             }
             with open(self.settings_file, "w", encoding="utf-8") as f:
@@ -58,6 +62,13 @@ class Settings:
 
     def set_key(self, action_name, key_sequence_str):
         self.shortcuts[action_name] = key_sequence_str
+        self.save()
+
+    def get_ui_language(self):
+        return self.ui_language or "en"
+
+    def set_ui_language(self, language_code: str):
+        self.ui_language = language_code or "en"
         self.save()
         
     def reset_defaults(self):

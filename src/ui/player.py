@@ -723,7 +723,7 @@ class Player(QWidget):
             return False
         if getattr(step, "keyboard_mode", "text") == "key":
             return True
-        return is_special_key_name(step.keyboard_input or "")
+        return False
 
     def _event_main_key_name(self, event) -> str | None:
         key_name = self._qt_key_to_name(event.key())
@@ -926,7 +926,8 @@ class Player(QWidget):
                 return True
             return False
 
-        if event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter):
+        space_submits = getattr(step, "keyboard_space_behavior", "submit_step") == "submit_step"
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) or (space_submits and event.key() == Qt.Key.Key_Space):
             print("  Submit key pressed for regular text step")
             self.on_text_submitted()
             return True
@@ -1158,9 +1159,12 @@ class Player(QWidget):
 
         step = self.tutorial.steps[self.current_step_index]
         expected = (step.keyboard_input or "").strip()
+        space_submits = getattr(step, "keyboard_space_behavior", "submit_step") == "submit_step"
 
         # Preserve spaces inside normal text such as coordinates like "420, 297".
         if (
+            space_submits
+            and
             text.endswith(' ')
             and ' ' not in expected
             and self._normalize_text_input(text.rstrip()) == self._normalize_text_input(expected)

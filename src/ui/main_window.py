@@ -222,6 +222,14 @@ class MainWindow(QMainWindow):
 
         self.btn_view.setMenu(self.view_menu)
 
+    def _refresh_view_menu_labels(self):
+        if not hasattr(self, "property_section_actions"):
+            return
+        section_titles = self.editor.get_property_sections()
+        for key, action in self.property_section_actions.items():
+            if key in section_titles:
+                action.setText(section_titles[key])
+
     def new_tutorial(self):
         self.tutorial = Tutorial()
         self.refresh_editor()
@@ -506,6 +514,6 @@ class MainWindow(QMainWindow):
         from .settings_dialog import SettingsDialog
         dlg = SettingsDialog(self)
         if dlg.exec():
-            # Reload settings in components if needed
-            # For now, most use settings.get_key() dynamically so no reload needed
-            pass
+            if hasattr(self, 'editor'):
+                self.editor.retranslate_properties_panel()
+            self._refresh_view_menu_labels()

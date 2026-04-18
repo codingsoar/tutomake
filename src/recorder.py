@@ -171,6 +171,7 @@ class Recorder:
         self.video_thread = None
         self.video_path = None
         self.audio_path = None
+        self.recording_dir = None
         self.monitor_left = 0
         self.monitor_top = 0
         self.native_width = 0
@@ -195,6 +196,7 @@ class Recorder:
         self.current_modifier_keys: set[str] = set()
         self.space_modifier_pending = False
         self.space_modifier_used = False
+        self.pending_text_space = False
 
     def _configure_audio_input(self):
         """Match stream settings to the selected device to avoid distorted capture."""
@@ -222,18 +224,17 @@ class Recorder:
         self.stop_event.clear()
         
         self.start_time = time.time()
+        session_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        self.recording_dir = self._create_recording_session_dir(session_timestamp)
         
         if self.video_mode:
             # Initialize video writer
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            video_filename = f"video_{timestamp}.avi"
-            self.video_path = os.path.join(self.storage_dir, video_filename)
+            self.video_path = os.path.join(self.recording_dir, "video.avi")
             self.tutorial.video_path = self.video_path
             
             # Audio file path
             if self.record_audio:
-                audio_filename = f"audio_{timestamp}.wav"
-                self.audio_path = os.path.join(self.storage_dir, audio_filename)
+                self.audio_path = os.path.join(self.recording_dir, "audio.wav")
                 self.audio_data = []
             
             # Get screen size from monitor 1
@@ -290,8 +291,15 @@ class Recorder:
         # Reset keyboard buffer
         self.key_buffer = ""
         self.key_buffer_start_time = 0.0
+        self.pending_text_space = False
         
         print("Recording started...")
+
+    def _create_recording_session_dir(self, session_timestamp: Optional[str] = None) -> str:
+        session_timestamp = session_timestamp or datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        session_dir = os.path.join(self.storage_dir, f"recording_{session_timestamp}")
+        os.makedirs(session_dir, exist_ok=True)
+        return session_dir
 
     def stop(self):
         if not self.is_recording:
@@ -300,7 +308,7 @@ class Recorder:
         self.stop_event.set()
         
         # Save any pending keyboard buffer
-        if self.key_buffer:
+        if self.key_buffer or self.pending_text_space:
             self._save_keyboard_step()
         
         # Calculate stats
@@ -535,7 +543,7 @@ class Recorder:
         else:
             button_name = "Click"
 
-        if pressed and self.key_buffer:
+        if pressed and (self.key_buffer or self.pending_text_space):
             self._save_keyboard_step()
 
         current_video_time = self._get_current_video_time()
@@ -551,6 +559,7 @@ class Recorder:
                 press_pos = self.middle_press_pos
                 last_pos = self.middle_last_pos or (x, y)
                 timestamp = self.middle_press_timestamp
+                release_timestamp = current_video_time
                 modifier_keys = list(self.middle_press_modifier_keys)
                 self.middle_press_pos = None
                 self.middle_last_pos = None
@@ -564,7 +573,7 @@ class Recorder:
                 if distance >= self.middle_drag_threshold:
                     threading.Thread(
                         target=self._capture_drag_step,
-                        args=(press_pos[0], press_pos[1], last_pos[0], last_pos[1], timestamp, "middle", modifier_keys),
+                        args=(press_pos[0], press_pos[1], last_pos[0], last_pos[1], timestamp, release_timestamp, "middle", modifier_keys),
                     ).start()
                 else:
                     threading.Thread(
@@ -584,7 +593,10 @@ class Recorder:
     def _capture_monitor_screenshot(self, x, y, action_label="Click"):
         ts_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         filename = f"step_{ts_str}.png"
-        filepath = os.path.join(self.storage_dir, filename)
+        output_dir = self.recording_dir or self.storage_dir
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir, exist_ok=True)
+        filepath = os.path.join(output_dir, filename)
 
         with mss.mss() as sct:
             if self.video_mode:
@@ -653,7 +665,7 @@ class Recorder:
         if self.on_step_callback:
             self.on_step_callback(step)
 
-    def _capture_drag_step(self, start_x, start_y, end_x, end_y, timestamp, button_name="middle", modifier_keys=None):
+    def _capture_drag_step(self, start_x, start_y, end_x, end_y, timestamp, release_timestamp=None, button_name="middle", modifier_keys=None):
         filepath, monitor_left, monitor_top = self._capture_monitor_screenshot(start_x, start_y, f"{button_name} drag")
         if not filepath:
             return
@@ -666,6 +678,7 @@ class Recorder:
         rel_end_y = end_y - monitor_top
         distance = math.hypot(rel_end_x - rel_start_x, rel_end_y - rel_start_y)
         modifier_keys = list(modifier_keys or [])
+        end_timestamp = float(release_timestamp if release_timestamp is not None else timestamp)
 
         step = Step(
             image_path=filepath,
@@ -680,6 +693,8 @@ class Recorder:
             drag_end_width=width,
             drag_end_height=height,
             drag_min_distance=max(int(distance * 0.35), self.middle_drag_threshold),
+            drag_start_timestamp=float(timestamp),
+            drag_end_timestamp=max(float(timestamp), end_timestamp),
             modifier_keys=modifier_keys,
             description=self._build_drag_description(button_name, modifier_keys),
             instruction=self._build_drag_instruction(rel_start_x, rel_start_y, rel_end_x, rel_end_y, button_name, modifier_keys),
@@ -733,6 +748,9 @@ class Recorder:
     def _mark_modifier_keys_used(self, modifier_keys):
         if "space" in (modifier_keys or []):
             self.space_modifier_used = True
+
+    def _should_insert_literal_space(self) -> bool:
+        return "shift" in self.current_modifier_keys
 
     def _modifier_from_key(self, key):
         key_name = normalize_key_name(getattr(key, "name", "") or "")
@@ -797,7 +815,7 @@ class Recorder:
                 modifier_keys = self._current_modifier_list()
                 if modifier_keys:
                     combo_char = self._normalize_char_key_for_combo(char)
-                    if self.key_buffer:
+                    if self.key_buffer or self.pending_text_space:
                         self._save_keyboard_step()
                     self._mark_modifier_keys_used(modifier_keys)
                     self._save_key_combo_step(combo_char, modifier_keys, key_code_from_char(char, vk))
@@ -806,18 +824,20 @@ class Recorder:
                 # Start buffer timing if this is the first key
                 if not self.key_buffer:
                     self.key_buffer_start_time = self._get_current_video_time()
-                    
+                self._commit_pending_text_space()
                 self.key_buffer += char
                 print(f"Key buffer: '{self.key_buffer}'")
                 
             elif key == keyboard.Key.space:
-                # Space ends keyboard input and adds a space
                 if self.key_buffer:
-                    self._save_keyboard_step()
+                    if self._should_insert_literal_space():
+                        self.pending_text_space = True
+                    else:
+                        self._save_keyboard_step()
                     
             elif key == keyboard.Key.enter:
                 modifier_keys = self._current_modifier_list()
-                if self.key_buffer:
+                if self.key_buffer or self.pending_text_space:
                     self._save_keyboard_step()
                     return
                 if modifier_keys:
@@ -828,41 +848,43 @@ class Recorder:
                     
             elif key == keyboard.Key.backspace:
                 # Allow backspace to correct input
-                if self.key_buffer:
+                if self.pending_text_space:
+                    self.pending_text_space = False
+                elif self.key_buffer:
                     self.key_buffer = self.key_buffer[:-1]
                     
             # Handle special keys as separate steps
             elif key == keyboard.Key.delete:
                 modifier_keys = self._current_modifier_list()
                 if modifier_keys:
-                    if self.key_buffer:
+                    if self.key_buffer or self.pending_text_space:
                         self._save_keyboard_step()
                     self._mark_modifier_keys_used(modifier_keys)
                     self._save_key_combo_step("delete", modifier_keys, self._key_code_from_event(key, "delete"))
                     return
-                if self.key_buffer:
+                if self.key_buffer or self.pending_text_space:
                     self._save_keyboard_step()
                 self._save_special_key_step("delete", self._key_code_from_event(key, "delete"))
             elif key == keyboard.Key.tab:
                 modifier_keys = self._current_modifier_list()
                 if modifier_keys:
-                    if self.key_buffer:
+                    if self.key_buffer or self.pending_text_space:
                         self._save_keyboard_step()
                     self._mark_modifier_keys_used(modifier_keys)
                     self._save_key_combo_step("tab", modifier_keys, self._key_code_from_event(key, "tab"))
                     return
-                if self.key_buffer:
+                if self.key_buffer or self.pending_text_space:
                     self._save_keyboard_step()
                 self._save_special_key_step("tab", self._key_code_from_event(key, "tab"))
             elif key == keyboard.Key.esc:
                 modifier_keys = self._current_modifier_list()
                 if modifier_keys:
-                    if self.key_buffer:
+                    if self.key_buffer or self.pending_text_space:
                         self._save_keyboard_step()
                     self._mark_modifier_keys_used(modifier_keys)
                     self._save_key_combo_step("esc", modifier_keys, self._key_code_from_event(key, "esc"))
                     return
-                if self.key_buffer:
+                if self.key_buffer or self.pending_text_space:
                     self._save_keyboard_step()
                 self._save_special_key_step("esc", self._key_code_from_event(key, "esc"))
             elif hasattr(key, 'name') and key.name:
@@ -871,23 +893,23 @@ class Recorder:
                 if key_name.startswith('f') and key_name[1:].isdigit():
                     modifier_keys = self._current_modifier_list()
                     if modifier_keys:
-                        if self.key_buffer:
+                        if self.key_buffer or self.pending_text_space:
                             self._save_keyboard_step()
                         self._mark_modifier_keys_used(modifier_keys)
                         self._save_key_combo_step(key_name, modifier_keys, self._key_code_from_event(key, key_name))
                         return
-                    if self.key_buffer:
+                    if self.key_buffer or self.pending_text_space:
                         self._save_keyboard_step()
                     self._save_special_key_step(key_name, self._key_code_from_event(key, key_name))
                 elif key_name in ['up', 'down', 'left', 'right']:
                     modifier_keys = self._current_modifier_list()
                     if modifier_keys:
-                        if self.key_buffer:
+                        if self.key_buffer or self.pending_text_space:
                             self._save_keyboard_step()
                         self._mark_modifier_keys_used(modifier_keys)
                         self._save_key_combo_step(key_name, modifier_keys, self._key_code_from_event(key, key_name))
                         return
-                    if self.key_buffer:
+                    if self.key_buffer or self.pending_text_space:
                         self._save_keyboard_step()
                     self._save_special_key_step(key_name, self._key_code_from_event(key, key_name))
                     
@@ -919,21 +941,42 @@ class Recorder:
         if hasattr(self, 'frame_count') and hasattr(self, 'fps') and self.fps > 0:
             return self.frame_count / self.fps
         return time.time() - self.start_time
+
+    def _commit_pending_text_space(self):
+        if not self.pending_text_space:
+            return
+        if not self.key_buffer:
+            self.key_buffer_start_time = self._get_current_video_time()
+        self.key_buffer += " "
+        self.pending_text_space = False
     
     def _save_keyboard_step(self):
         """Save the current keyboard buffer as a keyboard step."""
+        submitted_with_space = self.pending_text_space and bool(self.key_buffer)
+        if submitted_with_space:
+            self.pending_text_space = False
+        elif self.pending_text_space:
+            self._commit_pending_text_space()
+
         if not self.key_buffer:
             return
             
         timestamp = self.key_buffer_start_time
+        keyboard_input = self.key_buffer.rstrip() if submitted_with_space else self.key_buffer
+        if not keyboard_input:
+            self.key_buffer = ""
+            self.key_buffer_start_time = 0.0
+            return
+        keyboard_space_behavior = "insert_space" if any(ch.isspace() for ch in keyboard_input) else "submit_step"
         
         step = Step(
             action_type="keyboard",
             x=100,  # Default position
             y=100,
             description="Type text",
-            keyboard_input=self.key_buffer,
+            keyboard_input=keyboard_input,
             keyboard_mode="text",
+            keyboard_space_behavior=keyboard_space_behavior,
             timestamp=timestamp
         )
         
@@ -945,11 +988,15 @@ class Recorder:
             insert_idx = i + 1
         
         self._insert_step_sorted(step)
-        print(f"Captured keyboard step: '{self.key_buffer}' (timestamp={timestamp:.3f}s)")
+        print(
+            f"Captured keyboard step: '{keyboard_input}' "
+            f"(space_behavior={keyboard_space_behavior}, timestamp={timestamp:.3f}s)"
+        )
         
         # Clear buffer
         self.key_buffer = ""
         self.key_buffer_start_time = 0.0
+        self.pending_text_space = False
         
         if self.on_step_callback:
             self.on_step_callback(step)
