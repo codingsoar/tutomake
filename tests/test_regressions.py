@@ -861,7 +861,7 @@ class RegressionTests(unittest.TestCase):
         self.assertIn("const hintMessage = isSpecial", html)
         self.assertIn("modalInputGhost.textContent = step.keyboard_input || '';", html)
         self.assertIn("modalInputGhost.style.display = 'flex';", html)
-        self.assertIn("background: transparent;", html)
+        self.assertIn("background: rgba(7, 12, 24, 0.20);", html)
         self.assertIn("box-shadow: none;", html)
 
         video_html = WebExporter(tutorial)._generate_video_html(
@@ -874,7 +874,7 @@ class RegressionTests(unittest.TestCase):
         self.assertIn("const hintMessage = isSpecial", video_html)
         self.assertIn("modalInputGhost.textContent = step.keyboard_input || '';", video_html)
         self.assertIn("modalInputGhost.style.display = 'flex';", video_html)
-        self.assertIn("background: transparent;", video_html)
+        self.assertIn("background: rgba(7, 12, 24, 0.20);", video_html)
         self.assertIn("box-shadow: none;", video_html)
 
     def test_keyboard_step_korean_fallback_strings_are_readable_in_export(self):

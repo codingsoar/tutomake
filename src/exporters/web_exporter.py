@@ -602,7 +602,7 @@ class WebExporter:
             font-size: 1.28em;
             border: 2px solid rgba(255,255,255,0.12);
             border-radius: 18px;
-            background: rgba(255,255,255,0.06);
+            background: rgba(7, 12, 24, 0.20);
             color: white;
             text-align: center;
             outline: none;
@@ -2227,7 +2227,7 @@ class WebExporter:
             font-size: 1.28em;
             border: 2px solid rgba(255,255,255,0.12);
             border-radius: 18px;
-            background: rgba(255,255,255,0.06);
+            background: rgba(7, 12, 24, 0.20);
             color: white;
             text-align: center;
             position: relative;
