@@ -154,6 +154,26 @@ class Tutorial(BaseModel):
                     return parent
             return None
 
+        def find_capture_session_root(source: Path) -> Optional[Path]:
+            capture_root = find_capture_root(source)
+            if capture_root is None:
+                return None
+
+            resolved_capture_root = capture_root.resolve()
+            resolved_source = source.resolve()
+            try:
+                relative_parts = resolved_source.relative_to(resolved_capture_root).parts
+            except ValueError:
+                return None
+
+            if not relative_parts:
+                return None
+
+            if len(relative_parts) == 1:
+                return resolved_source.parent
+
+            return resolved_capture_root / relative_parts[0]
+
         def compression_for_path(source: Path) -> int:
             media_suffixes = {
                 ".avi", ".mp4", ".mov", ".mkv", ".webm", ".gif",
@@ -194,8 +214,8 @@ class Tutorial(BaseModel):
                 return source_path
 
             resolved = source.resolve()
-            capture_root = find_capture_root(resolved)
-            if capture_root is not None:
+            capture_root = find_capture_session_root(resolved)
+            if capture_root is not None and capture_root.exists():
                 archive_prefix_for_root = capture_roots.get(capture_root)
                 if archive_prefix_for_root is None:
                     capture_hash = hashlib.sha1(str(capture_root).encode("utf-8")).hexdigest()[:10]

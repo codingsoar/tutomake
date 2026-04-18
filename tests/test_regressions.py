@@ -211,22 +211,27 @@ class RegressionTests(unittest.TestCase):
         self.assertTrue(loaded.steps[0].guide_image_path)
         self.assertTrue(Path(loaded.steps[0].guide_image_path).exists())
 
-    def test_packaged_tutorial_includes_full_captures_directory_for_recorded_assets(self):
+    def test_packaged_tutorial_includes_only_referenced_capture_session_for_recorded_assets(self):
         tmpdir = self.make_tempdir()
         self.addCleanup(self.cleanup_tempdir, tmpdir)
         captures_dir = tmpdir / "captures"
-        captures_dir.mkdir()
-        image_path = captures_dir / "step_001.png"
-        video_path = captures_dir / "session.mp4"
-        extra_path = captures_dir / "unused_reference.txt"
-        nested_dir = captures_dir / "sub"
+        session_dir = captures_dir / "recording_20260419_120000_123456"
+        other_session_dir = captures_dir / "recording_20260419_130000_654321"
+        session_dir.mkdir(parents=True)
+        other_session_dir.mkdir(parents=True)
+        image_path = session_dir / "step_001.png"
+        video_path = session_dir / "session.mp4"
+        extra_path = session_dir / "unused_reference.txt"
+        nested_dir = session_dir / "sub"
         nested_dir.mkdir()
         nested_extra_path = nested_dir / "notes.bin"
+        other_image_path = other_session_dir / "other_step.png"
 
         self._make_image(image_path)
         video_path.write_bytes(b"\x00" * 4096)
         extra_path.write_text("keep me", encoding="utf-8")
         nested_extra_path.write_bytes(b"\x01\x02\x03")
+        self._make_image(other_image_path)
 
         tutorial = Tutorial(
             title="Recorded Assets",
@@ -243,6 +248,7 @@ class RegressionTests(unittest.TestCase):
             self.assertTrue(any(name.endswith("/step_001.png") for name in names))
             self.assertTrue(any(name.endswith("/unused_reference.txt") for name in names))
             self.assertTrue(any(name.endswith("/sub/notes.bin") for name in names))
+            self.assertFalse(any(name.endswith("/other_step.png") for name in names))
 
             video_entry = next(name for name in names if name.endswith("/session.mp4"))
             image_entry = next(name for name in names if name.endswith("/step_001.png"))
