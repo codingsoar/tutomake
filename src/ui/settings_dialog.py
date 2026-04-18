@@ -1,5 +1,6 @@
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
                              QTableWidget, QTableWidgetItem, QPushButton, QComboBox,
+                             QCheckBox,
                              QHeaderView, QMessageBox)
 from PySide6.QtCore import Qt
 from .widgets.hotkey_input import HotkeyInput
@@ -32,6 +33,14 @@ class SettingsDialog(QDialog):
         self.ui_language_combo.setCurrentIndex(language_index if language_index >= 0 else 0)
         language_layout.addWidget(self.ui_language_combo, 1)
         layout.addLayout(language_layout)
+
+        self.show_cursor_checkbox = QCheckBox("Show mouse cursor in recorded videos")
+        self.show_cursor_checkbox.setChecked(self.settings.get_show_recording_cursor())
+        layout.addWidget(self.show_cursor_checkbox)
+
+        self.highlight_clicks_checkbox = QCheckBox("Highlight mouse clicks in recorded videos")
+        self.highlight_clicks_checkbox.setChecked(self.settings.get_highlight_recording_clicks())
+        layout.addWidget(self.highlight_clicks_checkbox)
         
         # Shortcuts Table
         self.table = QTableWidget()
@@ -106,6 +115,8 @@ class SettingsDialog(QDialog):
             
     def save_settings(self):
         self.settings.set_ui_language(self.ui_language_combo.currentData() or "en")
+        self.settings.show_recording_cursor = self.show_cursor_checkbox.isChecked()
+        self.settings.highlight_recording_clicks = self.highlight_clicks_checkbox.isChecked()
         for action, inp in self.inputs.items():
             self.settings.shortcuts[action] = inp.key_sequence
             
@@ -115,4 +126,6 @@ class SettingsDialog(QDialog):
     def reset_defaults(self):
         if QMessageBox.question(self, "Reset Defaults", "Are you sure you want to reset all shortcuts to default?") == QMessageBox.StandardButton.Yes:
             self.settings.reset_defaults()
+            self.show_cursor_checkbox.setChecked(self.settings.get_show_recording_cursor())
+            self.highlight_clicks_checkbox.setChecked(self.settings.get_highlight_recording_clicks())
             self.populate_table()

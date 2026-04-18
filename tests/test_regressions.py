@@ -417,6 +417,54 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(tutorial.steps[0].keyboard_mode, "text")
         self.assertEqual(tutorial.steps[0].keyboard_space_behavior, "insert_space")
 
+    def test_recorder_renders_cursor_and_click_feedback_into_frame(self):
+        tmpdir = self.make_tempdir()
+        self.addCleanup(self.cleanup_tempdir, tmpdir)
+        tutorial = Tutorial()
+        recorder = Recorder(
+            tutorial,
+            str(tmpdir),
+            video_mode=True,
+            show_cursor=True,
+            highlight_clicks=True,
+        )
+        recorder.monitor_left = 100
+        recorder.monitor_top = 200
+        recorder.mouse_feedback_events = [
+            {"x": 124, "y": 232, "button": "left", "timestamp": 10.0}
+        ]
+
+        frame = np.zeros((120, 120, 4), dtype=np.uint8)
+        rendered = recorder._render_mouse_overlay(
+            frame,
+            cursor_position=(118, 222),
+            now=10.1,
+        )
+
+        self.assertFalse(np.array_equal(rendered, frame))
+        self.assertGreater(int(rendered.sum()), 0)
+        self.assertTrue(recorder.mouse_feedback_events)
+
+    def test_recorder_skips_mouse_overlay_when_disabled(self):
+        tmpdir = self.make_tempdir()
+        self.addCleanup(self.cleanup_tempdir, tmpdir)
+        tutorial = Tutorial()
+        recorder = Recorder(
+            tutorial,
+            str(tmpdir),
+            show_cursor=False,
+            highlight_clicks=False,
+        )
+
+        frame = np.zeros((60, 60, 4), dtype=np.uint8)
+        rendered = recorder._render_mouse_overlay(
+            frame,
+            cursor_position=(10, 10),
+            now=10.0,
+        )
+
+        self.assertTrue(np.array_equal(rendered, frame))
+
     def test_recorder_keeps_audio_path_when_audio_saved_separately(self):
         tmpdir = self.make_tempdir()
         self.addCleanup(self.cleanup_tempdir, tmpdir)
@@ -1284,6 +1332,22 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(editor.property_label_widgets["description"].text(), "설명:")
         self.assertEqual(editor.property_sections["guide_card"]["widget"].title(), "가이드 카드")
         self.assertEqual(editor.keyboard_mode_combo.itemText(0), "텍스트 입력")
+
+    def test_settings_persist_recording_cursor_preferences(self):
+        settings_path = Path("settings.json")
+        previous_settings = settings_path.read_text(encoding="utf-8") if settings_path.exists() else None
+        self.addCleanup(self.restore_settings, previous_settings)
+        Settings._instance = None
+
+        settings = Settings()
+        settings.set_show_recording_cursor(False)
+        settings.set_highlight_recording_clicks(False)
+
+        Settings._instance = None
+        reloaded = Settings()
+
+        self.assertFalse(reloaded.get_show_recording_cursor())
+        self.assertFalse(reloaded.get_highlight_recording_clicks())
 
     def test_editor_keyboard_input_change_refreshes_key_code(self):
         tutorial = Tutorial(

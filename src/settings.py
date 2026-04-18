@@ -14,6 +14,8 @@ class Settings:
     def _init(self):
         self.settings_file = "settings.json"
         self.ui_language = "en"
+        self.show_recording_cursor = True
+        self.highlight_recording_clicks = True
         self.shortcuts = {
             "toggle_recording": "Alt+S",
             "toggle_play": "Space",
@@ -39,6 +41,10 @@ class Settings:
                     data = json.load(f)
                     if "ui_language" in data:
                         self.ui_language = data["ui_language"] or "en"
+                    if "show_recording_cursor" in data:
+                        self.show_recording_cursor = bool(data["show_recording_cursor"])
+                    if "highlight_recording_clicks" in data:
+                        self.highlight_recording_clicks = bool(data["highlight_recording_clicks"])
                     if "shortcuts" in data:
                         self.shortcuts.update(data["shortcuts"])
             except Exception as e:
@@ -48,6 +54,8 @@ class Settings:
         try:
             data = {
                 "ui_language": self.ui_language,
+                "show_recording_cursor": self.show_recording_cursor,
+                "highlight_recording_clicks": self.highlight_recording_clicks,
                 "shortcuts": self.shortcuts
             }
             with open(self.settings_file, "w", encoding="utf-8") as f:
@@ -69,6 +77,20 @@ class Settings:
 
     def set_ui_language(self, language_code: str):
         self.ui_language = language_code or "en"
+        self.save()
+
+    def get_show_recording_cursor(self) -> bool:
+        return bool(self.show_recording_cursor)
+
+    def set_show_recording_cursor(self, enabled: bool):
+        self.show_recording_cursor = bool(enabled)
+        self.save()
+
+    def get_highlight_recording_clicks(self) -> bool:
+        return bool(self.highlight_recording_clicks)
+
+    def set_highlight_recording_clicks(self, enabled: bool):
+        self.highlight_recording_clicks = bool(enabled)
         self.save()
         
     def reset_defaults(self):

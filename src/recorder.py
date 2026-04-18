@@ -151,6 +151,8 @@ class Recorder:
         record_audio: bool = True,
         audio_device=None,
         audio_device_name: Optional[str] = None,
+        show_cursor: bool = True,
+        highlight_clicks: bool = True,
     ):
         self.tutorial = tutorial
         self.storage_dir = storage_dir
@@ -158,6 +160,8 @@ class Recorder:
         self.record_audio = record_audio and AUDIO_AVAILABLE
         self.audio_device = audio_device
         self.audio_device_name = audio_device_name or "Default Input"
+        self.show_cursor = show_cursor
+        self.highlight_clicks = highlight_clicks
         if not os.path.exists(self.storage_dir):
             os.makedirs(self.storage_dir)
             
@@ -197,6 +201,7 @@ class Recorder:
         self.space_modifier_pending = False
         self.space_modifier_used = False
         self.pending_text_space = False
+        self.mouse_feedback_events: list[dict] = []
 
     def _configure_audio_input(self):
         """Match stream settings to the selected device to avoid distorted capture."""
@@ -374,16 +379,13 @@ class Recorder:
                 # 1. Capture Frame
                 img = sct.grab(monitor)
                 frame_np = np.array(img)
-                
-                # 2. Draw Cursor (disabled per user request)
-                # mx, my = mouse_controller.position
-                # rel_x = int(mx - monitor_left)
-                # rel_y = int(my - monitor_top)
-                # 
-                # h, w = frame_np.shape[:2]
-                # if 0 <= rel_x < w and 0 <= rel_y < h:
-                #     cv2.circle(frame_np, (rel_x, rel_y), 5, (0, 0, 0, 255), -1) 
-                #     cv2.circle(frame_np, (rel_x, rel_y), 3, (255, 255, 255, 255), -1) 
+                frame_np = self._render_mouse_overlay(
+                    frame_np,
+                    cursor_position=mouse_controller.position,
+                    monitor_left=monitor_left,
+                    monitor_top=monitor_top,
+                    now=time.time(),
+                )
                 
                 # 3. Time Sync Logic
                 # Calculate how many video frames belong to this moment
@@ -543,6 +545,9 @@ class Recorder:
         else:
             button_name = "Click"
 
+        if pressed:
+            self._record_mouse_feedback(x, y, button_name.lower())
+
         if pressed and (self.key_buffer or self.pending_text_space):
             self._save_keyboard_step()
 
@@ -589,6 +594,117 @@ class Recorder:
         modifier_keys = self._current_modifier_list()
         self._mark_modifier_keys_used(modifier_keys)
         threading.Thread(target=self._capture_step, args=(x, y, current_video_time, button_name, modifier_keys)).start()
+
+    def _record_mouse_feedback(self, x: int, y: int, button_name: str):
+        if not self.highlight_clicks:
+            return
+        self.mouse_feedback_events.append(
+            {
+                "x": int(x),
+                "y": int(y),
+                "button": (button_name or "left").lower(),
+                "timestamp": time.time(),
+            }
+        )
+        if len(self.mouse_feedback_events) > 12:
+            self.mouse_feedback_events = self.mouse_feedback_events[-12:]
+
+    def _render_mouse_overlay(
+        self,
+        frame: np.ndarray,
+        cursor_position: Optional[tuple[int, int]] = None,
+        monitor_left: Optional[int] = None,
+        monitor_top: Optional[int] = None,
+        now: Optional[float] = None,
+    ) -> np.ndarray:
+        if not (self.show_cursor or self.highlight_clicks):
+            return frame
+
+        now = time.time() if now is None else now
+        monitor_left = self.monitor_left if monitor_left is None else monitor_left
+        monitor_top = self.monitor_top if monitor_top is None else monitor_top
+        rendered = frame
+
+        if self.highlight_clicks and self.mouse_feedback_events:
+            active_events = []
+            for event in self.mouse_feedback_events:
+                age = now - float(event.get("timestamp", now))
+                if age <= 0.45:
+                    rendered = self._draw_click_feedback(rendered, event, age, monitor_left, monitor_top)
+                    active_events.append(event)
+            self.mouse_feedback_events = active_events
+
+        if self.show_cursor and cursor_position:
+            rel_x = int(cursor_position[0] - monitor_left)
+            rel_y = int(cursor_position[1] - monitor_top)
+            rendered = self._draw_mouse_cursor(rendered, rel_x, rel_y)
+
+        return rendered
+
+    def _draw_mouse_cursor(self, frame: np.ndarray, x: int, y: int) -> np.ndarray:
+        h, w = frame.shape[:2]
+        if not (0 <= x < w and 0 <= y < h):
+            return frame
+
+        overlay = frame.copy()
+        shadow = np.array(
+            [
+                (x + 3, y + 3),
+                (x + 3, y + 28),
+                (x + 10, y + 22),
+                (x + 16, y + 36),
+                (x + 22, y + 33),
+                (x + 16, y + 19),
+                (x + 25, y + 19),
+            ],
+            dtype=np.int32,
+        )
+        pointer = np.array(
+            [
+                (x, y),
+                (x, y + 25),
+                (x + 7, y + 19),
+                (x + 13, y + 33),
+                (x + 19, y + 30),
+                (x + 13, y + 17),
+                (x + 22, y + 17),
+            ],
+            dtype=np.int32,
+        )
+        cv2.fillConvexPoly(overlay, shadow, (20, 20, 20, 255))
+        cv2.fillConvexPoly(overlay, pointer, (255, 255, 255, 255))
+        cv2.polylines(overlay, [pointer], True, (0, 0, 0, 255), 2, lineType=cv2.LINE_AA)
+        return cv2.addWeighted(overlay, 0.96, frame, 0.04, 0)
+
+    def _draw_click_feedback(
+        self,
+        frame: np.ndarray,
+        event: dict,
+        age: float,
+        monitor_left: int,
+        monitor_top: int,
+    ) -> np.ndarray:
+        rel_x = int(event.get("x", 0) - monitor_left)
+        rel_y = int(event.get("y", 0) - monitor_top)
+        h, w = frame.shape[:2]
+        if not (0 <= rel_x < w and 0 <= rel_y < h):
+            return frame
+
+        progress = max(0.0, min(1.0, age / 0.45))
+        radius = int(14 + (progress * 28))
+        alpha = max(0.18, 0.65 * (1.0 - progress))
+        button_name = (event.get("button") or "left").lower()
+        colors = {
+            "left": (80, 220, 255, 255),
+            "right": (255, 120, 120, 255),
+            "middle": (120, 255, 160, 255),
+        }
+        color = colors.get(button_name, (80, 220, 255, 255))
+
+        overlay = frame.copy()
+        cv2.circle(overlay, (rel_x, rel_y), radius, color, 3, lineType=cv2.LINE_AA)
+        cv2.circle(overlay, (rel_x, rel_y), max(4, radius // 4), color, -1, lineType=cv2.LINE_AA)
+        return cv2.addWeighted(overlay, alpha, frame, 1.0 - alpha, 0)
 
     def _capture_monitor_screenshot(self, x, y, action_label="Click"):
         ts_str = datetime.now().strftime("%Y%m%d_%H%M%S_%f")

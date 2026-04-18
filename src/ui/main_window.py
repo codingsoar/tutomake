@@ -265,12 +265,15 @@ class MainWindow(QMainWindow):
         # Initialize recorder - always use video mode
         storage_dir = os.path.join(os.getcwd(), "captures")
         selected_device, selected_name = self.editor.get_selected_audio_input()
+        settings = Settings()
         self.recorder = Recorder(
             self.tutorial,
             storage_dir,
             video_mode=True,
             audio_device=selected_device,
             audio_device_name=selected_name,
+            show_cursor=settings.get_show_recording_cursor(),
+            highlight_clicks=settings.get_highlight_recording_clicks(),
         )
         
         # Show overlay (countdown will be triggered from RecorderOverlay)
