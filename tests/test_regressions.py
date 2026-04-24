@@ -820,11 +820,12 @@ class RegressionTests(unittest.TestCase):
         self.assertIn("const offset = Math.max(28, Number(guideConfig.cardOffset || 16));", html)
         self.assertIn("return step.guide_image || guideConfig.characterImage || '';", html)
         self.assertIn("title: customTitle ? escapeHtml(customTitle) : fallbackClickTitle,", html)
-        self.assertIn("body: customInstruction ? escapeHtml(customInstruction) : (modifierText", html)
+        self.assertIn("body: customInstruction ? escapeHtml(customInstruction) : ''", html)
         self.assertEqual(html.count("const guideCard = guideOverlay.querySelector('.guide-card');"), 1)
         self.assertIn("stepBadge.textContent = String(step.index || '');", html)
         self.assertIn("stepDesc.innerHTML = guide.title;", html)
         self.assertIn("stepInstruction.innerHTML = guide.body;", html)
+        self.assertIn("stepInstruction.style.display = guide.body ? 'block' : 'none';", html)
         self.assertIn("class=\"guide-step-badge\" id=\"stepBadge\"", html)
         self.assertIn("stepBadge.style.width = `${badgeSize}px`;", html)
         self.assertIn("stepBadge.style.height = `${badgeSize}px`;", html)
@@ -878,13 +879,53 @@ class RegressionTests(unittest.TestCase):
         self.assertIn("const offset = Math.max(28, Number(guideConfig.cardOffset || 16));", video_html)
         self.assertIn("return step.guide_image || guideConfig.characterImage || '';", video_html)
         self.assertIn("title: customTitle ? escapeHtml(customTitle) : fallbackClickTitle,", video_html)
-        self.assertIn("body: customInstruction ? escapeHtml(customInstruction) : (modifierText", video_html)
+        self.assertIn("body: customInstruction ? escapeHtml(customInstruction) : ''", video_html)
         self.assertEqual(video_html.count("const guideCard = guideOverlay.querySelector('.guide-card');"), 1)
         self.assertIn("stepBadge.textContent = String(step.index || '');", video_html)
         self.assertIn("stepDesc.innerHTML = guide.title;", video_html)
         self.assertIn("stepInstruction.innerHTML = guide.body;", video_html)
+        self.assertIn("stepInstruction.style.display = guide.body ? 'block' : 'none';", video_html)
         self.assertIn("stepBadge.style.width = `${badgeSize}px`;", video_html)
         self.assertIn("stepBadge.style.height = `${badgeSize}px`;", video_html)
+
+    def test_html_exports_hide_mouse_instruction_body_when_cleared(self):
+        tmpdir = self.make_tempdir()
+        self.addCleanup(self.cleanup_tempdir, tmpdir)
+        image_path = tmpdir / "source.png"
+        self._make_image(image_path)
+
+        tutorial = Tutorial(
+            title="Cleared Mouse Instruction",
+            guide_language="ko",
+            steps=[
+                Step(
+                    description="진단조사 클릭",
+                    instruction="",
+                    action_type="click",
+                    image_path=str(image_path),
+                    x=10,
+                    y=10,
+                    width=20,
+                    height=20,
+                    timestamp=1.0,
+                )
+            ],
+        )
+
+        html = WebExporter(tutorial)._generate_html(
+            [WebExporter(tutorial)._serialize_step(tutorial.steps[0], 0)]
+        )
+        video_html = WebExporter(tutorial)._generate_video_html(
+            [WebExporter(tutorial)._serialize_step(tutorial.steps[0], 0)],
+            "demo.mp4",
+        )
+
+        self.assertIn("body: customInstruction ? escapeHtml(customInstruction) : ''", html)
+        self.assertIn("stepInstruction.style.display = guide.body ? 'block' : 'none';", html)
+        self.assertNotIn("strings.clickBody", html)
+        self.assertIn("body: customInstruction ? escapeHtml(customInstruction) : ''", video_html)
+        self.assertIn("stepInstruction.style.display = guide.body ? 'block' : 'none';", video_html)
+        self.assertNotIn("strings.clickBody", video_html)
 
     def test_keyboard_steps_use_custom_guide_card_text_and_minimal_input_modal(self):
         tmpdir = self.make_tempdir()

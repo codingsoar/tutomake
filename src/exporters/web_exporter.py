@@ -1300,9 +1300,7 @@ class WebExporter:
                 return {{
                     eyebrow: strings.dragStep,
                     title: customTitle ? escapeHtml(customTitle) : fallbackTitle,
-                    body: customInstruction ? escapeHtml(customInstruction) : (modifierText
-                        ? `${{strings.holdPrefix}} <span class="guide-accent">${{escapeHtml(modifierText)}}</span>${{strings.holdWhileDragging}}`
-                        : strings.dragBody)
+                    body: customInstruction ? escapeHtml(customInstruction) : ''
                 }};
             }}
 
@@ -1311,9 +1309,7 @@ class WebExporter:
             return {{
                 eyebrow: strings.clickStep,
                 title: customTitle ? escapeHtml(customTitle) : fallbackClickTitle,
-                body: customInstruction ? escapeHtml(customInstruction) : (modifierText
-                    ? `${{strings.holdPrefix}} <span class="guide-accent">${{escapeHtml(modifierText)}}</span>${{strings.holdWhileClicking}}`
-                    : strings.clickBody)
+                body: customInstruction ? escapeHtml(customInstruction) : ''
             }};
         }}
 
@@ -1510,6 +1506,7 @@ class WebExporter:
             stepBadge.textContent = String(step.index || '');
             stepDesc.innerHTML = guide.title;
             stepInstruction.innerHTML = guide.body;
+            stepInstruction.style.display = guide.body ? 'block' : 'none';
             const characterImage = resolveGuideCharacter(step);
             if (characterImage) {{
                 guideCharacter.src = characterImage;
@@ -2839,9 +2836,7 @@ class WebExporter:
                 return {{
                     eyebrow: strings.dragStep,
                     title: customTitle ? escapeHtml(customTitle) : fallbackTitle,
-                    body: customInstruction ? escapeHtml(customInstruction) : (modifierText
-                        ? `${{strings.holdPrefix}} <span class="guide-accent">${{escapeHtml(modifierText)}}</span>${{strings.holdWhileDragging}}`
-                        : strings.dragBody)
+                    body: customInstruction ? escapeHtml(customInstruction) : ''
                 }};
             }}
 
@@ -2850,9 +2845,7 @@ class WebExporter:
             return {{
                 eyebrow: strings.clickStep,
                 title: customTitle ? escapeHtml(customTitle) : fallbackClickTitle,
-                body: customInstruction ? escapeHtml(customInstruction) : (modifierText
-                    ? `${{strings.holdPrefix}} <span class="guide-accent">${{escapeHtml(modifierText)}}</span>${{strings.holdWhileClicking}}`
-                    : strings.clickBody)
+                body: customInstruction ? escapeHtml(customInstruction) : ''
             }};
         }}
         function guideStrings() {{
@@ -3102,6 +3095,7 @@ class WebExporter:
             stepBadge.textContent = String(step.index || '');
             stepDesc.innerHTML = guide.title;
             stepInstruction.innerHTML = guide.body;
+            stepInstruction.style.display = guide.body ? 'block' : 'none';
             const characterImage = resolveGuideCharacter(step);
             if (characterImage) {{
                 guideCharacter.src = characterImage;
